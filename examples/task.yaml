@@ -1,0 +1,28 @@
+#syntax=quay.io/vdemeest/buildkit-tekton:v0.0.1
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: print-date-
+spec:
+  taskSpec:
+    description: |
+      A simple task that prints the date.
+    steps:
+      - name: print-date-unix-timestamp
+        image: bash:latest
+        command: ["/usr/local/bin/bash"]
+        args: ["-c", "date +%s | tee /tekton/results/current-date-unix-timestamp"]
+        #script: |
+        #  #!/usr/bin/env bash
+        #  date +%s | tee /tekton/results/current-date-unix-timestamp
+      - name: print-date-human-readable
+        image: bash:latest
+        command: ["/usr/local/bin/bash"]
+        args: ["-c", "date | tee /tekton/results/current-date-unix-timestamp-human"]
+        # script: |
+        #   #!/usr/bin/env bash
+        #   date | tee /tekton/results/current-date-human-readable
+      - name: list-results
+        image: bash:latest
+        command: ["/usr/local/bin/bash"]
+        args: ["-c", "ls -l /; ls -l /tekton/results/; ls -l /tekton-results/*"]

@@ -1,4 +1,4 @@
-VERSION := v0.0.1
+VERSION := latest
 IMAGE_REFERENCE := quay.io/vdemeest/buildkit-tekton
 
 all: image/push

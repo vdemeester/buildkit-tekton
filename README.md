@@ -1,4 +1,4 @@
-![example](./example.png)
+[![asciinema example](https://asciinema.org/a/469173.svg)](https://asciinema.org/a/469173)
 
 # buildkit-tekton
 

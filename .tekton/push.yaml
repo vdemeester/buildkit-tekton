@@ -41,7 +41,7 @@ spec:
         taskRef:
           name: buildah
         workspaces:
-          - name: output
+          - name: source
             workspace: source
   workspaces:
     - name: source

@@ -35,6 +35,7 @@ func TektonToLLB(l string) (llb.State, error) {
 		runOpt := []llb.RunOption{
 			llb.Args(append(s.Command, s.Args...)),
 			// llb.Dir("/dest"), // FIXME: support workdir
+			llb.IgnoreCache, // FIXME: see if we can enable the cache on some run
 		}
 		mounts := []llb.RunOption{
 			llb.AddMount("/tekton/results", steps[i].s, llb.AsPersistentCacheDir("results", llb.CacheMountShared)),

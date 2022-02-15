@@ -1,0 +1,54 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: buildkit-tekton-on-pull-request
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/task: "[git-clone, .tekton/tasks/buildah.yaml]"
+    pipelinesascode.tekton.dev/max-keep-runs: "2"
+spec:
+  serviceAccountName: buildkit-tekton-sa
+  params:
+    - name: repo_url
+      value: "{{repo_url}}"
+    - name: revision
+      value: "{{revision}}"
+  pipelineSpec:
+    params:
+      - name: repo_url
+      - name: revision
+    workspaces:
+      - name: source
+    tasks:
+      - name: fetch
+        params:
+          - name: url
+            value: $(params.repo_url)
+          - name: revision
+            value: $(params.revision)
+        taskRef:
+          name: git-clone
+        workspaces:
+          - name: output
+            workspace: source
+      - name: build-and-push
+        runAfter: [ fetch ]
+        params:
+          - name: IMAGE
+            value: quay.io/vdemeest/buildkit-tekton
+        taskRef:
+          name: buildah
+        workspaces:
+          - name: output
+            workspace: source
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi

@@ -1,4 +1,4 @@
-#syntax=quay.io/vdemeest/buildkit-tekton:v0.0.1
+#syntax=quay.io/vdemeest/buildkit-tekton
 apiVersion: tekton.dev/v1beta1
 kind: TaskRun
 metadata:

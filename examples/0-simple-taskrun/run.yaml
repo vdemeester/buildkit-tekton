@@ -2,7 +2,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: TaskRun
 metadata:
-  generateName: print-date-
+  generateName: simple-task-
 spec:
   taskSpec:
     description: |

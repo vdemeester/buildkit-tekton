@@ -1,0 +1,38 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generatedName: simple-pipeline-
+spec:
+  pipelineSpec:
+    tasks:
+      - name: task-1
+        taskSpec:
+          steps:
+            - name: echo-from-bash-0
+              image: bash:latest
+              command: ["/usr/local/bin/bash"]
+              args: ["-c", "echo from bash, step 0 | tee /tekton/results/step-0"]
+            - name: echo-from-bash-1
+              image: bash:latest
+              command: ["/usr/local/bin/bash"]
+              args: ["-c", "echo from bash, step 1 | tee /tekton/results/step-1; sleep 5"]
+            - name: list-results
+              image: bash:latest
+              command: ["/usr/local/bin/bash"]
+              args: ["-c", "ls -l /tekton/results/"]
+      - name: task-2
+        runAfter: [task-1]
+        taskSpec:
+          steps:
+            - name: echo-from-fedora
+              image: ubuntu:latest
+              command: ["/bin/bash"]
+              args: ["-c", "echo from ubuntu, step 0 | tee /tekton/results/step-0"]
+      - name: task-3
+        taskSpec:
+          steps:
+            - name: echo-from-fedora
+              image: fedora:latest
+              command: ["/bin/sh"]
+              args: ["-c", "echo from fedora, step 0 | tee /tekton/results/step-0; sleep 10"]

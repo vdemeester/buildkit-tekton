@@ -24,7 +24,7 @@ for f in "${td}"/examples/*; do
 	(
 		cd "$f"
         # FIXME(vdemester) change this to support more yamls
-		df="taskrun.yaml"
+		df="run.yaml"
 		sed -i '1 s/^ *#*syntax*=.*$//' "${df}"
 		(
 			echo "#syntax=${image}"

@@ -42,6 +42,18 @@ spec:
         workspaces:
           - name: source
             workspace: source
+      - name: build-and-push
+        runAfter: [ fetch ]
+        params:
+          - name: IMAGE
+            value: quay.io/vdemeest/buildkit-tekton
+          - name: SKIP_PUSH
+            value: "true"
+        taskRef:
+          name: buildah
+        workspaces:
+          - name: source
+            workspace: source
   workspaces:
     - name: source
       volumeClaimTemplate:

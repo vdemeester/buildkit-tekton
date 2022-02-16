@@ -48,7 +48,7 @@ spec:
           - name: IMAGE
             value: quay.io/vdemeest/buildkit-tekton
           - name: SKIP_PUSH
-            value: true
+            value: "true"
         taskRef:
           name: buildah
         workspaces:

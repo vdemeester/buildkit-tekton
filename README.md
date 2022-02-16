@@ -31,7 +31,7 @@ No options yet, but there will be a lot.
 There is a [examples](./examples) folder to try things out.
 
 ```bash
-$ docker build -t foo -f examples/taskrun.yaml .
+$ docker build -t foo -f examples/simple/taskrun.yaml .
 [+] Building 1.4s (10/10) FINISHED                                                => [internal] load build definition from task.yaml                         0.0s
  => => transferring dockerfile: 1.06kB                                      0.0s
  => [internal] load .dockerignore                                           0.0s

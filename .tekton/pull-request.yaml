@@ -47,6 +47,8 @@ spec:
         params:
           - name: IMAGE
             value: quay.io/vdemeest/buildkit-tekton
+          - name: DOCKERFILE
+            value: Dockerfile.buildah
           - name: SKIP_PUSH
             value: "true"
         taskRef:

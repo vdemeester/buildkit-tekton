@@ -1,12 +1,14 @@
-VERSION := latest
-IMAGE_REFERENCE := quay.io/vdemeest/buildkit-tekton
+VERSION         = latest
+IMAGE_REFERENCE = quay.io/vdemeest/buildkit-tekton
+RUNTIME         = docker
+
 
 all: image/push
 
 .PHONY: image/push
 image/push: image
-	docker push $(IMAGE_REFERENCE):${VERSION}
+	${RUNTIME} push $(IMAGE_REFERENCE):${VERSION}
 
 .PHONE: image
 image:
-	docker build -t ${IMAGE_REFERENCE}:${VERSION} .
+	${RUNTIME} build -f Dockerfile.${RUNTIME} -t ${IMAGE_REFERENCE}:${VERSION} .

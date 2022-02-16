@@ -15,7 +15,7 @@ cp -a examples "${td}"
 "$DOCKER" run -d --name reg -p 127.0.0.1:5000:5000 docker.io/library/registry:2
 
 image="127.0.0.1:5000/buildkit-tekton:test-${version}-${timestamp}"
-"$DOCKER" build -t "$image" -f Dockerfile .
+"$DOCKER" build -t "$image" -f Dockerfile.docker .
 "$DOCKER" push "$image"
 
 for f in "${td}"/examples/*; do
@@ -27,7 +27,7 @@ for f in "${td}"/examples/*; do
 		df="taskrun.yaml"
 		sed -i '1 s/^ *#*syntax*=.*$//' "${df}"
 		(
-			echo "# syntax = ${image}"
+			echo "#syntax=${image}"
 			cat "${df}"
 		) | sponge "${df}"
 		"$DOCKER" build -t "${name}" -f "${df}" .

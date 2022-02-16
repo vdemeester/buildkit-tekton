@@ -38,6 +38,8 @@ spec:
         params:
           - name: IMAGE
             value: quay.io/vdemeest/buildkit-tekton
+          - name: DOCKERFILE
+            value: Dockerfile.buildah
         taskRef:
           name: buildah
         workspaces:

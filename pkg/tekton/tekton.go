@@ -2,6 +2,7 @@ package tekton
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
@@ -122,20 +123,14 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 		}
 		logrus.Infof("tasks: %+v", tasks)
 	}
-	ft := llb.Image("alpine")
-	mounts := []llb.RunOption{}
-	for k, v := range tasks {
-		targetMount := fmt.Sprintf("/tekton/from-task/%s", k)
-		mounts = append(mounts,
-			llb.AddMount(targetMount, v.steps[len(v.steps)-1].s, llb.SourcePath("/tekton/results"), llb.Readonly),
-		)
+	ft := llb.Scratch()
+	fa := llb.Mkdir("/task", os.FileMode(int(0777)))
+	for n, t := range tasks {
+		state := t.steps[len(t.steps)-1].s
+		taskPath := fmt.Sprintf("/task/%s", n)
+		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
 	}
-	runOpt := []llb.RunOption{
-		llb.Args([]string{"/bin/ls", "-l", "/"}),
-		// llb.Dir("/dest"), // FIXME: support workdir
-		llb.IgnoreCache, // FIXME: see if we can enable the cache on some run
-	}
-	return ft.Run(append(runOpt, mounts...)...).Root(), nil
+	return ft.File(fa), nil
 }
 
 func readTypes(data string) types {

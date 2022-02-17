@@ -102,7 +102,7 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 	}
 	pipelineWorkspaces := map[string]llb.MountOption{}
 	for _, w := range pr.Spec.PipelineSpec.Workspaces {
-		pipelineWorkspaces[w.Name] = llb.AsPersistentCacheDir(w.Name, llb.CacheMountShared)
+		pipelineWorkspaces[w.Name] = llb.AsPersistentCacheDir(pr.Name+"/"+w.Name, llb.CacheMountShared)
 	}
 	logrus.Infof("pipelineWorkspaces: %+v", pipelineWorkspaces)
 	for _, t := range pr.Spec.PipelineSpec.Tasks {

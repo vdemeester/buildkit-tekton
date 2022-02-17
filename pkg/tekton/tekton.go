@@ -115,11 +115,13 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 		logrus.Infof("taskWorkspaces: %+v", taskWorkspaces)
 		for j, s := range t.TaskSpec.TaskSpec.Steps {
 			logrus.Infof("step: %s\n", s.Name)
+			name := fmt.Sprintf("[%s/%s]", t.Name, s.Name)
 			// TODO: support script (how?)
 			runOpt := []llb.RunOption{
 				llb.Args(append(s.Command, s.Args...)),
 				// llb.Dir("/dest"), // FIXME: support workdir
 				llb.IgnoreCache, // FIXME: see if we can enable the cache on some run
+				llb.WithCustomName(name),
 			}
 			if s.WorkingDir != "" {
 				runOpt = append(runOpt, llb.With(llb.Dir(s.WorkingDir)))
@@ -166,7 +168,7 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 		taskPath := fmt.Sprintf("/task/%s", n)
 		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
 	}
-	return ft.File(fa), nil
+	return ft.File(fa, llb.WithCustomName("[results] buildking image from result (fake)")), nil
 }
 
 func readTypes(data string) types {

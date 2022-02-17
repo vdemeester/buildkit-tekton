@@ -2,7 +2,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  generatedName: simple-pipeline-
+  generateName: simple-pipeline-
 spec:
   pipelineSpec:
     tasks:

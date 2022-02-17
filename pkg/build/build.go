@@ -21,7 +21,7 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "getting tekton task")
 	}
-	st, err := tekton.TektonToLLB(cfg)
+	st, err := tekton.TektonToLLB(c)(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

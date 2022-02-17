@@ -6,7 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/docker/distribution/reference"
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/frontend/gateway/client"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
@@ -25,46 +29,59 @@ type step struct {
 	s llb.State
 }
 
-// Only support TaskRun with embedded Task to start.
-func TektonToLLB(l string) (llb.State, error) {
-
-	s := k8scheme.Scheme
-	if err := v1beta1.AddToScheme(s); err != nil {
-		return llb.State{}, err
-	}
-
-	types := readTypes(l)
-	if len(types.TaskRuns) > 0 && len(types.PipelineRuns) > 0 {
-		return llb.State{}, fmt.Errorf("failed to unmarshal %v, multiple objects not yet supported", l)
-	} else if len(types.TaskRuns) == 0 && len(types.PipelineRuns) == 0 {
-		return llb.State{}, fmt.Errorf("failed to unmarshal %v, unknown object", l)
-	} else if len(types.TaskRuns) > 1 || len(types.PipelineRuns) > 1 {
-		return llb.State{}, fmt.Errorf("failed to unmarshal %v, multiple objects not yet supported", l)
-	}
-
-	if len(types.TaskRuns) > 0 {
-		return taskRunToLLB(types.TaskRuns[0])
-	} else if len(types.PipelineRuns) > 0 {
-		return pipelineRunToLLB(types.PipelineRuns[0])
-	}
-	return llb.State{}, fmt.Errorf("Invalid state")
+type prestep struct {
+	image      ocispecs.Image
+	mounts     []llb.RunOption
+	runoptions []llb.RunOption
 }
 
-func taskRunToLLB(tr *v1beta1.TaskRun) (llb.State, error) {
+// Only support TaskRun with embedded Task to start.
+func TektonToLLB(c client.Client) func(context.Context, string) (llb.State, error) {
+	return func(ctx context.Context, l string) (llb.State, error) {
+		s := k8scheme.Scheme
+		if err := v1beta1.AddToScheme(s); err != nil {
+			return llb.State{}, err
+		}
+
+		types := readTypes(l)
+		if len(types.TaskRuns) > 0 && len(types.PipelineRuns) > 0 {
+			return llb.State{}, fmt.Errorf("failed to unmarshal %v, multiple objects not yet supported", l)
+		} else if len(types.TaskRuns) == 0 && len(types.PipelineRuns) == 0 {
+			return llb.State{}, fmt.Errorf("failed to unmarshal %v, unknown object", l)
+		} else if len(types.TaskRuns) > 1 || len(types.PipelineRuns) > 1 {
+			return llb.State{}, fmt.Errorf("failed to unmarshal %v, multiple objects not yet supported", l)
+		}
+
+		if len(types.TaskRuns) > 0 {
+			return taskRunToLLB(ctx, c, types.TaskRuns[0])
+		} else if len(types.PipelineRuns) > 0 {
+			return pipelineRunToLLB(ctx, c, types.PipelineRuns[0])
+		}
+		return llb.State{}, fmt.Errorf("Invalid state")
+	}
+}
+
+func taskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (llb.State, error) {
 	if tr.Name == "" && tr.GenerateName != "" {
 		tr.Name = tr.GenerateName + "generated"
 	}
-	if err := tr.Validate(context.Background()); err != nil {
+	if err := tr.Validate(ctx); err != nil {
 		return llb.State{}, err
 	}
-	steps, err := taskSpecToSteps(*tr.Spec.TaskSpec)
+	steps, err := taskSpecToSteps(ctx, c, *tr.Spec.TaskSpec)
 	return steps[len(steps)-1].s, err
 }
 
-func taskSpecToSteps(t v1beta1.TaskSpec) ([]step, error) {
+func taskSpecToSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec) ([]step, error) {
 	steps := make([]step, len(t.Steps))
 	for i, s := range t.Steps {
 		logrus.Infof("step: %s\n", s.Name)
+		ref, err := reference.ParseNormalizedNamed(s.Image)
+		if err != nil {
+			return steps, errors.Wrapf(err, "failed to parse stage name %q", s.Image)
+		}
+		logrus.Infof("ref %v", ref)
+		ts := llb.Image(ref.String(), llb.WithMetaResolver(c), llb.WithCustomName("load metadata from "+ref.String()))
 		// TODO: support script (how?)
 		runOpt := []llb.RunOption{
 			llb.Args(append(s.Command, s.Args...)),
@@ -85,19 +102,19 @@ func taskSpecToSteps(t v1beta1.TaskSpec) ([]step, error) {
 			)
 		}
 		step := step{}
-		step.s = llb.Image(s.Image).Run(append(runOpt, mounts...)...).Root()
+		step.s = ts.Run(append(runOpt, mounts...)...).Root()
 		steps[i] = step
 	}
 	return steps, nil
 }
 
-func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
+func pipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.PipelineRun) (llb.State, error) {
 	tasks := map[string]task{}
 
 	if pr.Name == "" && pr.GenerateName != "" {
 		pr.Name = pr.GenerateName + "generated"
 	}
-	if err := pr.Validate(context.Background()); err != nil {
+	if err := pr.Validate(ctx); err != nil {
 		return llb.State{}, err
 	}
 	pipelineWorkspaces := map[string]llb.MountOption{}
@@ -153,7 +170,7 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 			}
 			logrus.Infof("mounts: %+v", mounts)
 			step := step{}
-			step.s = llb.Image(s.Image).Run(append(runOpt, mounts...)...).Root()
+			step.s = llb.Image(s.Image, llb.WithMetaResolver(c)).Run(append(runOpt, mounts...)...).Root()
 			steps[j] = step
 		}
 		tasks[t.Name] = task{
@@ -168,7 +185,7 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 		taskPath := fmt.Sprintf("/task/%s", n)
 		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
 	}
-	return ft.File(fa, llb.WithCustomName("[results] buildking image from result (fake)")), nil
+	return ft.File(fa, llb.WithCustomName("[results] buildking image from result (fake)"), llb.IgnoreCache), nil
 }
 
 func readTypes(data string) types {

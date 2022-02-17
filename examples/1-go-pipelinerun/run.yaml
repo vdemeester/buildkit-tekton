@@ -37,7 +37,7 @@ spec:
           - name: unit-test
             image: docker.io/library/golang:1.17
             command: ["/bin/bash", "-c"]
-            args: ["pwd; ls -la; echo $PATH; /usr/local/go/bin/go test ./..."]
+            args: ["pwd; ls -la; echo $PATH; go test ./..."]
             workingDir: /workspace/source
         workspaces:
           - name: source

@@ -42,7 +42,7 @@ func main() {
 
 func printGraph(filename string, out io.Writer) error {
 	b, _ := ioutil.ReadFile(filename)
-	st, err := tekton.TektonToLLB(string(b))
+	st, err := tekton.TektonToLLB(nil)(context.Background(), string(b))
 	if err != nil {
 		return errors.Wrap(err, "to llb")
 	}

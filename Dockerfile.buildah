@@ -4,9 +4,9 @@ FROM ${GOLANG_IMAGE} AS build
 WORKDIR /src
 ENV CGO_ENABLED=0
 COPY go.* .
-RUN go mod download
+RUN --mount=type=cache,target=/root/.cache --mount=type=cache,target=/go/pkg go mod download
 COPY . .
-RUN go build -trimpath -ldflags "-s -w" -o /out/buildkit-tekton ./cmd/buildkit-tekton
+RUN --mount=type=cache,target=/root/.cache --mount=type=cache,target=/go/pkg go build -trimpath -ldflags "-s -w" -o /out/buildkit-tekton ./cmd/buildkit-tekton
 
 FROM scratch
 COPY --from=build /out/ /

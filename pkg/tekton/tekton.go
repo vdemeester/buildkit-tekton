@@ -1,6 +1,7 @@
 package tekton
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -50,6 +51,12 @@ func TektonToLLB(l string) (llb.State, error) {
 }
 
 func taskRunToLLB(tr *v1beta1.TaskRun) (llb.State, error) {
+	if tr.Name == "" && tr.GenerateName != "" {
+		tr.Name = tr.GenerateName + "generated"
+	}
+	if err := tr.Validate(context.Background()); err != nil {
+		return llb.State{}, err
+	}
 	steps, err := taskSpecToSteps(*tr.Spec.TaskSpec)
 	return steps[len(steps)-1].s, err
 }
@@ -63,6 +70,9 @@ func taskSpecToSteps(t v1beta1.TaskSpec) ([]step, error) {
 			llb.Args(append(s.Command, s.Args...)),
 			// llb.Dir("/dest"), // FIXME: support workdir
 			llb.IgnoreCache, // FIXME: see if we can enable the cache on some run
+		}
+		if s.WorkingDir != "" {
+			runOpt = append(runOpt, llb.With(llb.Dir(s.WorkingDir)))
 		}
 		mounts := []llb.RunOption{
 			llb.AddMount("/tekton/results", steps[i].s, llb.AsPersistentCacheDir("results", llb.CacheMountShared)),
@@ -83,9 +93,26 @@ func taskSpecToSteps(t v1beta1.TaskSpec) ([]step, error) {
 
 func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 	tasks := map[string]task{}
+
+	if pr.Name == "" && pr.GenerateName != "" {
+		pr.Name = pr.GenerateName + "generated"
+	}
+	if err := pr.Validate(context.Background()); err != nil {
+		return llb.State{}, err
+	}
+	pipelineWorkspaces := map[string]llb.MountOption{}
+	for _, w := range pr.Spec.PipelineSpec.Workspaces {
+		pipelineWorkspaces[w.Name] = llb.AsPersistentCacheDir(w.Name, llb.CacheMountShared)
+	}
+	logrus.Infof("pipelineWorkspaces: %+v", pipelineWorkspaces)
 	for _, t := range pr.Spec.PipelineSpec.Tasks {
 		logrus.Infof("task: %s\n", t.Name)
 		steps := make([]step, len(t.TaskSpec.TaskSpec.Steps))
+		taskWorkspaces := map[string]llb.MountOption{}
+		for _, w := range t.Workspaces {
+			taskWorkspaces["/workspace/"+w.Name] = pipelineWorkspaces[w.Workspace]
+		}
+		logrus.Infof("taskWorkspaces: %+v", taskWorkspaces)
 		for j, s := range t.TaskSpec.TaskSpec.Steps {
 			logrus.Infof("step: %s\n", s.Name)
 			// TODO: support script (how?)
@@ -94,8 +121,16 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 				// llb.Dir("/dest"), // FIXME: support workdir
 				llb.IgnoreCache, // FIXME: see if we can enable the cache on some run
 			}
+			if s.WorkingDir != "" {
+				runOpt = append(runOpt, llb.With(llb.Dir(s.WorkingDir)))
+			}
 			mounts := []llb.RunOption{
 				llb.AddMount("/tekton/results", steps[j].s, llb.AsPersistentCacheDir("results", llb.CacheMountShared)),
+			}
+			for path, mountOpt := range taskWorkspaces {
+				mounts = append(mounts,
+					llb.AddMount(path, steps[j].s, mountOpt),
+				)
 			}
 			if j > 0 {
 				// TODO: mount previous results or something to create a dependency
@@ -114,6 +149,7 @@ func pipelineRunToLLB(pr *v1beta1.PipelineRun) (llb.State, error) {
 					)
 				}
 			}
+			logrus.Infof("mounts: %+v", mounts)
 			step := step{}
 			step.s = llb.Image(s.Image).Run(append(runOpt, mounts...)...).Root()
 			steps[j] = step

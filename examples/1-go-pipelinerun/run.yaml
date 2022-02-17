@@ -1,0 +1,60 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  annotations:
+    pipelinesascode.tekton.dev/max-keep-runs: "2"
+    pipelinesascode.tekton.dev/on-event: '[pull_request]'
+    pipelinesascode.tekton.dev/on-target-branch: '[main]'
+    pipelinesascode.tekton.dev/task: '[git-clone, golang-test, .tekton/tasks/buildah.yaml]'
+  generateName: buildkit-tekton-go-test-
+  labels:
+    pipelinesascode.tekton.dev/original-prname: buildkit-tekton-on-pull-request
+spec:
+  pipelineSpec:
+    tasks:
+    - name: fetch
+      taskSpec:
+        steps:
+          - name: git-init
+            image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.21.0
+            command: ["/bin/sh", "-c"]
+            args: [ "/ko-app/git-init \
+            -url=https://github.com/vdemeester/buildkit-tekton \
+            -revision=main \
+            -path=/workspace/output"]
+            workingDir: /workspace/output
+        workspaces:
+          - name: output
+      workspaces:
+      - name: output
+        workspace: source
+    - name: test
+      runAfter:
+      - fetch
+      taskSpec:
+        steps:
+          - name: unit-test
+            image: docker.io/library/golang:1.17
+            command: ["/bin/bash", "-c"]
+            args: ["pwd; ls -la; echo $PATH; /usr/local/go/bin/go test ./..."]
+            workingDir: /workspace/source
+        workspaces:
+          - name: source
+      workspaces:
+        - name: source
+          workspace: source
+    workspaces:
+      - name: source
+  workspaces:
+  - name: source
+    volumeClaimTemplate:
+      metadata:
+        creationTimestamp: null
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+      status: {}

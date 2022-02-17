@@ -7,7 +7,6 @@ import (
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
-	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
@@ -16,20 +15,6 @@ import (
 type types struct {
 	PipelineRuns []*v1beta1.PipelineRun
 	TaskRuns     []*v1beta1.TaskRun
-}
-
-type task struct {
-	steps []step
-}
-
-type step struct {
-	s llb.State
-}
-
-type prestep struct {
-	image      ocispecs.Image
-	mounts     []llb.RunOption
-	runoptions []llb.RunOption
 }
 
 // Only support TaskRun with embedded Task to start.

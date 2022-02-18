@@ -66,7 +66,8 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 				)
 			}
 		}
-		stepStates, err := pstepToState(c, steps, mounts)
+		resultState := llb.Scratch()
+		stepStates, err := pstepToState(c, steps, resultState, mounts)
 		if err != nil {
 			return llb.State{}, err
 		}

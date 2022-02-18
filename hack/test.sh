@@ -23,13 +23,15 @@ for f in "${td}"/examples/*; do
 	echo "===== ${name} ====="
 	(
 		cd "$f"
-        # FIXME(vdemester) change this to support more yamls
-		df="run.yaml"
-		sed -i '1 s/^ *#*syntax*=.*$//' "${df}"
-		(
-			echo "#syntax=${image}"
-			cat "${df}"
-		) | sponge "${df}"
-		"$DOCKER" build -t "${name}" -f "${df}" .
+        for sf in "${f}"/*.yaml; do
+            sname="$(basename "${sf}")"
+            echo "---- ${sname} ----"
+		    sed -i '1 s/^ *#*syntax*=.*$//' "${sf}"
+		    (
+			    echo "#syntax=${image}"
+			    cat "${sf}"
+		    ) | sponge "${sf}"
+		    "$DOCKER" build -t "${name}" -f "${sf}" .
+        done
 	)
 done

@@ -158,6 +158,13 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 				llb.With(llb.Dir(step.WorkingDir)),
 			)
 		}
+		if len(step.Env) > 0 {
+			for _, e := range step.Env {
+				runOptions = append(runOptions,
+					llb.AddEnv(e.Name, e.Value),
+				)
+			}
+		}
 		results := []mountOptionFn{
 			func(state llb.State) llb.RunOption {
 				return llb.AddMount("/tekton/results", state, llb.AsPersistentCacheDir(cacheDirName, llb.CacheMountShared))

@@ -3,6 +3,8 @@ package tekton
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/docker/distribution/reference"
 	"github.com/moby/buildkit/client/llb"
@@ -10,8 +12,14 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/names"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	corev1 "k8s.io/api/core/v1"
+)
+
+const (
+	defaultScriptPreamble = "#!/bin/sh\nset -e\n"
+	scriptsDir            = "/tekton/scripts"
 )
 
 type pstep struct {
@@ -119,7 +127,27 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 			llb.WithCustomName(name + "/" + step.Name),
 		}
 		if step.Script != "" {
-			return steps, errors.New("script not supported")
+			// Check for a shebang, and add a default if it's not set.
+			// The shebang must be the first non-empty line.
+			cleaned := strings.TrimSpace(step.Script)
+			hasShebang := strings.HasPrefix(cleaned, "#!")
+
+			script := step.Script
+			if !hasShebang {
+				script = defaultScriptPreamble + step.Script
+			}
+			filename := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("script-%d", i))
+			scriptFile := filepath.Join(scriptsDir, filename)
+			sourcePath := "/"
+			data := script
+			scriptSt := llb.Scratch().Dir("/").File(
+				llb.Mkfile(filename, 0755, []byte(data)),
+				llb.WithCustomName(name+"/"+step.Name+": preparing script"),
+			)
+			runOptions = append(runOptions,
+				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath(sourcePath), llb.Readonly),
+				llb.Args([]string{scriptFile}),
+			)
 		} else {
 			runOptions = append(runOptions,
 				llb.Args(append(step.Command, step.Args...)),

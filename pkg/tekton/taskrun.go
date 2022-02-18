@@ -166,6 +166,15 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 				)
 			}
 		}
+		if step.SecurityContext != nil {
+			if step.SecurityContext.RunAsUser != nil {
+				user := fmt.Sprintf("%d", *step.SecurityContext.RunAsUser)
+				logrus.Infof("user: %s", user)
+				runOptions = append(runOptions,
+					llb.With(llb.User(user)),
+				)
+			}
+		}
 		results := []mountOptionFn{
 			func(state llb.State) llb.RunOption {
 				return llb.AddMount("/tekton/results", state, llb.AsPersistentCacheDir(cacheDirName, llb.CacheMountShared))

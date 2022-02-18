@@ -64,6 +64,7 @@ spec:
     image: $(params.BUILDER_IMAGE)
     workingDir: $(workspaces.source.path)
     script: |
+      env
       echo "Running as USER ID `id`"
       [[ "$(workspaces.sslcertdir.bound)" == "true" ]] && CERT_DIR_FLAG="--cert-dir $(workspaces.sslcertdir.path)"
       buildah ${CERT_DIR_FLAG} --storage-driver=$(params.STORAGE_DRIVER) bud \

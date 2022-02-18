@@ -18,9 +18,19 @@ spec:
           #!/usr/bin/env bash
           set -e -u -x
           date | tee /tekton/results/current-date-unix-timestamp-human
+      - name: print-something-from-env
+        image: bash:latest
+        env:
+          - name: FOO
+            value: BAR
+        script: |
+          echo ${FOO} | tee /tekton/results/foo
       - name: list-results
         image: bash:latest
         script: |
+          #!/usr/bin/env bash
+          set -e -u -x
           ls -l /tekton/results/
-          cat /tekton/results/current-date-unix-timestamp-human
-          cat /tekton/results/current-date-unix-timestamp
+          [[ -f /tekton/results/current-date-unix-timestamp-human ]]
+          [[ -f /tekton/results/current-date-unix-timestamp ]]
+          [[ $(cat /tekton/results/foo) == BAR ]]

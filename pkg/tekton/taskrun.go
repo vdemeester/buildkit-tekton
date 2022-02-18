@@ -17,7 +17,7 @@ import (
 type pstep struct {
 	name       string
 	image      string // might be ref
-	mounts     []mountOptionFn
+	results    []mountOptionFn
 	runOptions []llb.RunOption
 	workspaces map[string]llb.MountOption
 }
@@ -54,8 +54,10 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to builtkit llb")
 	}
+
+	resultState := llb.Scratch()
 	logrus.Infof("steps: %+v", steps)
-	stepStates, err := pstepToState(c, steps, []llb.RunOption{})
+	stepStates, err := pstepToState(c, steps, resultState, []llb.RunOption{})
 	if err != nil {
 		return llb.State{}, err
 	}
@@ -128,7 +130,7 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 				llb.With(llb.Dir(step.WorkingDir)),
 			)
 		}
-		mounts := []mountOptionFn{
+		results := []mountOptionFn{
 			func(state llb.State) llb.RunOption {
 				return llb.AddMount("/tekton/results", state, llb.AsPersistentCacheDir(cacheDirName, llb.CacheMountShared))
 			},
@@ -137,26 +139,26 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 			name:       step.Name,
 			image:      ref.String(),
 			runOptions: runOptions,
-			mounts:     mounts,
+			results:    results,
 			workspaces: workspaces,
 		}
 	}
 	return steps, nil
 }
 
-func pstepToState(c client.Client, steps []pstep, additionnalMounts []llb.RunOption) ([]llb.State, error) {
+func pstepToState(c client.Client, steps []pstep, resultState llb.State, additionnalMounts []llb.RunOption) ([]llb.State, error) {
 	stepStates := make([]llb.State, len(steps))
 	for i, step := range steps {
 		logrus.Infof("step-%d: %s", i, step.name)
 		runOptions := step.runOptions
-		mounts := make([]llb.RunOption, len(step.mounts))
-		for i, m := range step.mounts {
-			mounts[i] = m(stepStates[i])
+		mounts := make([]llb.RunOption, len(step.results))
+		for i, r := range step.results {
+			mounts[i] = r(resultState)
 		}
 		// If not the first step, we need to create the chain to execute things in sequence
 		if i > 0 {
 			// TODO decide what to mount exactly
-			targetMount := fmt.Sprintf("/tekton-results/%d", i-1)
+			targetMount := fmt.Sprintf("/previous/%d", i-1)
 			mounts = append(mounts,
 				llb.AddMount(targetMount, stepStates[i-1], llb.SourcePath("/"), llb.Readonly),
 			)

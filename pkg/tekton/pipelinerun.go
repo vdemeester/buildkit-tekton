@@ -42,15 +42,29 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 	tasks := map[string][]llb.State{}
 	for _, t := range ps.Tasks {
 		logrus.Infof("pipelinetask: %s", t.Name)
+		logrus.Infof("pipelinetask: %+v", t)
 		if t.TaskSpec == nil {
 			return llb.State{}, errors.Errorf("%s: TaskRef not supported", t.Name)
 		}
+
+		logrus.Infof("pipelinetask.TaskSpec: %+v", t.TaskSpec)
+		ts, err := applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
+			Spec: v1beta1.TaskRunSpec{
+				Params:   t.Params,
+				TaskSpec: &t.TaskSpec.TaskSpec,
+			},
+		})
+		if err != nil {
+			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", t.Name)
+		}
+
+		logrus.Infof("pipelinetask.TaskSpec: %+v", ts)
 		taskWorkspaces := map[string]llb.MountOption{}
 		for _, w := range t.Workspaces {
 			taskWorkspaces["/workspace/"+w.Name] = pipelineWorkspaces[w.Workspace]
 		}
 		logrus.Infof("taskWorkspaces: %+v", taskWorkspaces)
-		steps, err := taskSpecToPSteps(ctx, c, t.TaskSpec.TaskSpec, t.Name, taskWorkspaces)
+		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces)
 		if err != nil {
 			return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to llb")
 		}

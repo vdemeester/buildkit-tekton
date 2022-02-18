@@ -1,0 +1,21 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: simple-task-
+spec:
+  taskSpec:
+    description: |
+      A simple task that prints the date.
+    params:
+      - name: foo
+        default: bar
+    steps:
+      - name: echo-param
+        image: bash:latest
+        command: ["/usr/local/bin/bash"]
+        args: ["-c", "echo $(params.foo) | tee /tekton/results/foo"]
+      - name: verify-param-value
+        image: bash:latest
+        command: ["/usr/local/bin/bash"]
+        args: ["-c", "[[ $(cat /tekton/results/foo) == bar ]]"]

@@ -12,17 +12,11 @@ spec:
         image: bash:latest
         command: ["/usr/local/bin/bash"]
         args: ["-c", "date +%s | tee /tekton/results/current-date-unix-timestamp"]
-        #script: |
-        #  #!/usr/bin/env bash
-        #  date +%s | tee /tekton/results/current-date-unix-timestamp
       - name: print-date-human-readable
         image: bash:latest
         command: ["/usr/local/bin/bash"]
         args: ["-c", "date | tee /tekton/results/current-date-unix-timestamp-human"]
-        # script: |
-        #   #!/usr/bin/env bash
-        #   date | tee /tekton/results/current-date-human-readable
       - name: list-results
         image: bash:latest
         command: ["/usr/local/bin/bash"]
-        args: ["-c", "ls -l /; ls -l /tekton/results/; ls -l /tekton-results/*"]
+        args: ["-c", "ls -l /tekton/results/; cat /tekton/results/current-date-unix-timestamp-human; cat /tekton/results/current-date-unix-timestamp"]

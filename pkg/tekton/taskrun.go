@@ -10,6 +10,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
+	corev1 "k8s.io/api/core/v1"
 )
 
 type pstep struct {
@@ -27,22 +29,28 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 	if tr.Name == "" && tr.GenerateName != "" {
 		tr.Name = tr.GenerateName + "generated"
 	}
+	tr.SetDefaults(ctx)
 	if err := tr.Validate(ctx); err != nil {
 		return llb.State{}, errors.Wrapf(err, "validation failed for Taskrun %s", tr.Name)
 	}
 	if tr.Spec.TaskSpec == nil {
 		return llb.State{}, errors.New("TaskRef not supported")
 	}
+	// TODO(vdemeester) bail out on other unsupported field, like PipelineResources, …
 
 	// Interpolation
-	// TODO(vdemeester) implement this
+	ts, err := applyTaskRunSubstitution(ctx, tr)
+	if err != nil {
+		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
+	}
+	logrus.Infof("TaskSpec: %+v", ts)
 
 	// Execution
 	workspaces := map[string]llb.MountOption{}
 	for _, w := range tr.Spec.Workspaces {
 		workspaces[w.Name] = llb.AsPersistentCacheDir(tr.Name+"/"+w.Name, llb.CacheMountShared)
 	}
-	steps, err := taskSpecToPSteps(ctx, c, *tr.Spec.TaskSpec, tr.Name, workspaces)
+	steps, err := taskSpecToPSteps(ctx, c, ts, tr.Name, workspaces)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to builtkit llb")
 	}
@@ -52,6 +60,43 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 		return llb.State{}, err
 	}
 	return stepStates[len(stepStates)-1], nil
+}
+
+func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun) (v1beta1.TaskSpec, error) {
+	ts := tr.Spec.TaskSpec.DeepCopy()
+
+	var defaults []v1beta1.ParamSpec
+	if len(ts.Params) > 0 {
+		defaults = append(defaults, ts.Params...)
+	}
+	// Apply parameter substitution from the taskrun.
+	ts = resources.ApplyParameters(ts, tr, defaults...)
+
+	// Apply context substitution from the taskrun
+	ts = resources.ApplyContexts(ts, &resources.ResolvedTaskResources{TaskName: "embedded"}, tr) // FIXME(vdemeester) handle this "embedded" better
+
+	// TODO(vdemeester) support PipelineResource ?
+	// Apply bound resource substitution from the taskrun.
+	// ts = resources.ApplyResources(ts, inputResources, "inputs")
+	// ts = resources.ApplyResources(ts, outputResources, "outputs")
+
+	// Apply workspace resource substitution
+	workspaceVolumes := map[string]corev1.Volume{}
+	for _, v := range tr.Spec.Workspaces {
+		workspaceVolumes[v.Name] = corev1.Volume{Name: v.Name}
+	}
+	ts = resources.ApplyWorkspaces(ctx, ts, ts.Workspaces, tr.Spec.Workspaces, workspaceVolumes)
+
+	// Apply task result substitution
+	ts = resources.ApplyTaskResults(ts)
+
+	// Apply step exitCode path substitution
+	ts = resources.ApplyStepExitCodePath(ts)
+
+	if err := ts.Validate(ctx); err != nil {
+		return *ts, err
+	}
+	return *ts, nil
 }
 
 func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, name string, workspaces map[string]llb.MountOption) ([]pstep, error) {

@@ -118,6 +118,7 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 	}
 	logrus.Infof("+taskWorkspaces: %+v", taskWorkspaces)
 	for i, step := range t.Steps {
+		logrus.Infof("steps.image: %s", step.Image)
 		ref, err := reference.ParseNormalizedNamed(step.Image)
 		if err != nil {
 			return steps, err
@@ -185,6 +186,7 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 	stepStates := make([]llb.State, len(steps))
 	for i, step := range steps {
 		logrus.Infof("step-%d: %s", i, step.name)
+		logrus.Infof("step-%d: %s", i, step.image)
 		runOptions := step.runOptions
 		mounts := make([]llb.RunOption, len(step.results))
 		for i, r := range step.results {

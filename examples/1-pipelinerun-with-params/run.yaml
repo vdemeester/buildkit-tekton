@@ -1,0 +1,57 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: simple-task-
+spec:
+  params:
+    - name: foo
+      value: baz
+    - name: bar
+      value: baz
+  pipelineSpec:
+    params:
+      - name: foo
+        default: bar
+      - name: bar
+        default: foo
+    tasks:
+      - name: task-1
+        params:
+          - name: foo
+            value: $(params.foo)
+        taskSpec:
+          params:
+            - name: foo
+          stepTemplate:
+            image: bash:latest
+          steps:
+            - name: echo-from-bash-0
+              script: |
+                #!/usr/bin/env bash
+                set -u -e
+                echo $(params.foo) > /tekton/results/foo
+            - name: verify-param-value
+              script: |
+                #!/usr/bin/env bash
+                set -u -e
+                [[ $(cat /tekton/results/foo) == baz ]]
+      - name: task-2
+        params:
+          - name: bar
+            value: $(params.bar)
+        taskSpec:
+          params:
+            - name: bar
+          stepTemplate:
+            image: bash:latest
+          steps:
+            - name: echo-from-bash-0
+              script: |
+                #!/usr/bin/env bash
+                echo $(params.bar) > /tekton/results/bar
+            - name: verify-param-value
+              script: |
+                #!/usr/bin/env bash
+                set -u -e
+                [[ $(cat /tekton/results/bar) == baz ]]

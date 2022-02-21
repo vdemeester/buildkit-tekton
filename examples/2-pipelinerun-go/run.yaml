@@ -11,19 +11,28 @@ metadata:
   labels:
     pipelinesascode.tekton.dev/original-prname: buildkit-tekton-on-pull-request
 spec:
+  params:
+    - name: repo_url
+      value: https://github.com/vdemeester/go-helloworld-app
   pipelineSpec:
+    params:
+      - name: repo_url
     tasks:
     - name: fetch
+      params:
+        - name: repo_url
+          value: $(params.repo_url)
       taskSpec:
+        params:
+          - name: repo_url
+          - name: revision
+            default: main
         steps:
           - name: git-init
             image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.21.0
-            command: ["/bin/sh", "-c"]
-            args: [ "/ko-app/git-init \
-            -url=https://github.com/vdemeester/buildkit-tekton \
-            -revision=main \
-            -path=/workspace/output"]
-            workingDir: /workspace/output
+            script: |
+              /ko-app/git-init -url=$(params.repo_url) -revision=$(params.revision) -path=$(workspaces.output.path)
+            workingDir: $(workspaces.output.path)
         workspaces:
           - name: output
       workspaces:
@@ -36,9 +45,10 @@ spec:
         steps:
           - name: unit-test
             image: docker.io/library/golang:1.17
-            command: ["/bin/bash", "-c"]
-            args: ["pwd; ls -la; ls -la *; echo $PATH; go test ./..."]
-            workingDir: /workspace/source
+            script: |
+              pwd; ls -la; ls -la *; echo $PATH
+              go test ./...
+            workingDir: $(workspaces.source.path)
         workspaces:
           - name: source
       workspaces:

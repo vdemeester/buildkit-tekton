@@ -272,7 +272,10 @@ func validateTaskSpec(ctx context.Context, t v1beta1.TaskSpec) error {
 		// Silently ignore TerminationMessagePath
 		// Silently ignore TerminationMessagePolicy
 		// Silently ignore Resources (for now)
-		// TODO: support ImagePullPolicy, Stdin, StdinOnce and TTY
+		// Silently ignore ImagePullPolicy
+		// Silently ignore Stdin
+		// Silently ignore StdinOnce
+		// Silently ignore TTY
 	}
 	return nil
 }

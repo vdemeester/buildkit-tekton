@@ -124,6 +124,7 @@ func validatePipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) error {
 	if pr.Spec.Timeouts != nil {
 		return errors.New("Timeouts are not supported")
 	}
+	// We might be able to silently ignore
 	if pr.Spec.PodTemplate != nil {
 		return errors.New("PodTemplate are not supported")
 	}

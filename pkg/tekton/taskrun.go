@@ -34,17 +34,9 @@ type mountOptionFn func(llb.State) llb.RunOption
 
 func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (llb.State, error) {
 	// Validation
-	if tr.Name == "" && tr.GenerateName != "" {
-		tr.Name = tr.GenerateName + "generated"
+	if err := validateTaskRun(ctx, tr); err != nil {
+		return llb.State{}, err
 	}
-	tr.SetDefaults(ctx)
-	if err := tr.Validate(ctx); err != nil {
-		return llb.State{}, errors.Wrapf(err, "validation failed for Taskrun %s", tr.Name)
-	}
-	if tr.Spec.TaskSpec == nil {
-		return llb.State{}, errors.New("TaskRef not supported")
-	}
-	// TODO(vdemeester) bail out on other unsupported field, like PipelineResources, …
 
 	// Interpolation
 	ts, err := applyTaskRunSubstitution(ctx, tr)
@@ -224,4 +216,63 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 		stepStates[i] = state
 	}
 	return stepStates, nil
+}
+
+func validateTaskRun(ctx context.Context, tr *v1beta1.TaskRun) error {
+	if tr.Name == "" && tr.GenerateName != "" {
+		tr.Name = tr.GenerateName + "generated"
+	}
+	tr.SetDefaults(ctx)
+	if err := tr.Validate(ctx); err != nil {
+		return errors.Wrapf(err, "validation failed for Taskrun %s", tr.Name)
+	}
+	if tr.Spec.TaskSpec == nil {
+		return errors.New("TaskRef not supported")
+	}
+	if tr.Spec.PodTemplate != nil {
+		return errors.New("PodTemplate not supported")
+	}
+	return validateTaskSpec(ctx, *tr.Spec.TaskSpec)
+}
+
+func validateTaskSpec(ctx context.Context, t v1beta1.TaskSpec) error {
+	if t.Resources != nil {
+		return errors.New("PipelineResources are not supported")
+	}
+	if len(t.Sidecars) > 0 {
+		return errors.New("Sidecars are not supported")
+	}
+	if t.StepTemplate != nil {
+		return errors.New("StepTemplate not supported")
+	}
+	if len(t.Volumes) > 0 {
+		return errors.New("Volumes not supported")
+	}
+	for i, s := range t.Steps {
+		if s.Timeout != nil {
+			return errors.Errorf("Step %d: Timeout not supported", i)
+		}
+		if s.OnError != "" {
+			return errors.Errorf("Step %d: OnError not supported", i)
+		}
+		if len(s.EnvFrom) > 0 {
+			return errors.Errorf("Step %d: EnvFrom not supported", i)
+		}
+		if len(s.VolumeMounts) > 0 {
+			return errors.Errorf("Step %d: VolumeMounts not supported", i)
+		}
+		if len(s.VolumeDevices) > 0 {
+			return errors.Errorf("Step %d: VolumeDevices not supported", i)
+		}
+		// Silently ignore Ports
+		// Silently ignore LivenessProbe
+		// Silently ignore ReadinessProbe
+		// Silently ignore StartupProbe
+		// Silently ignore Lifecycle
+		// Silently ignore TerminationMessagePath
+		// Silently ignore TerminationMessagePolicy
+		// Silently ignore Resources (for now)
+		// TODO: support ImagePullPolicy, Stdin, StdinOnce and TTY
+	}
+	return nil
 }

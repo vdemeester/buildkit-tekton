@@ -11,21 +11,14 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/resources"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.PipelineRun) (llb.State, error) {
 	// Validation
-	if pr.Name == "" && pr.GenerateName != "" {
-		pr.Name = pr.GenerateName + "generated"
+	if err := validatePipelineRun(ctx, pr); err != nil {
+		return llb.State{}, err
 	}
-	pr.SetDefaults(ctx)
-	if err := pr.Validate(ctx); err != nil {
-		return llb.State{}, errors.Wrapf(err, "validation failed for PipelineRun %s", pr.Name)
-	}
-	if pr.Spec.PipelineSpec == nil {
-		return llb.State{}, errors.New("PipelineRef not supported")
-	}
-	// TODO(vdemeester) bail out on other unsupported field, like PipelineResources, Finally, …
 
 	// Interpolation
 	ps, err := applyPipelineRunSubstitution(ctx, pr)
@@ -109,4 +102,70 @@ func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun) 
 	}
 
 	return *ps, nil
+}
+
+func validatePipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) error {
+	if pr.Name == "" && pr.GenerateName != "" {
+		pr.Name = pr.GenerateName + "generated"
+	}
+	pr.SetDefaults(ctx)
+	if err := pr.Validate(ctx); err != nil {
+		return errors.Wrapf(err, "validation failed for PipelineRun %s", pr.Name)
+	}
+	if pr.Spec.PipelineSpec == nil {
+		return errors.New("PipelineRef not supported")
+	}
+	if len(pr.Spec.Resources) > 0 {
+		return errors.New("PipelineResources are not supported")
+	}
+	// SilentlyIgnore ServiceAccountName
+	// SilentlyIgnore ServiceAccountNames
+	// SilentlyIgnore Status
+	if pr.Spec.Timeouts != nil {
+		return errors.New("Timeouts are not supported")
+	}
+	if pr.Spec.PodTemplate != nil {
+		return errors.New("PodTemplate are not supported")
+	}
+	if pr.Spec.TaskRunSpecs != nil {
+		return errors.New("TaskRunSpecs are not supported")
+	}
+	// TODO(vdemeester) bail out on other unsupported field, like PipelineResources, Finally, …
+	return validatePipeline(ctx, *pr.Spec.PipelineSpec)
+}
+
+func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
+	if len(p.Resources) > 0 {
+		return errors.New("PipelineResources are not supported")
+	}
+	if len(p.Finally) > 0 {
+		return errors.New("Finally are not supporte (yet)")
+	}
+	for _, pt := range p.Tasks {
+		if pt.TaskSpec == nil {
+			return errors.Errorf("Task %s: TaskRef not supported", pt.Name)
+		}
+		if len(pt.Conditions) > 0 {
+			return errors.Errorf("Task %s: Conditions not supported", pt.Name)
+		}
+		if len(pt.WhenExpressions) > 0 {
+			return errors.Errorf("Task %s: WhenExpressions not supported", pt.Name)
+		}
+		// Silently ignore Retries
+		if pt.Timeout != nil {
+			return errors.Errorf("Task % s: Timeout not supported", pt.Name)
+		}
+		if !isTektonTask(pt.TaskSpec.TypeMeta) {
+			return errors.Errorf("Task %s: Custom task not supported", pt.Name)
+		}
+		if err := validateTaskSpec(ctx, pt.TaskSpec.TaskSpec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isTektonTask(typeMeta runtime.TypeMeta) bool {
+	return (typeMeta.APIVersion == "" && typeMeta.Kind == "") ||
+		(typeMeta.APIVersion == "tekton.dev/v1beta1" && typeMeta.Kind == "Task")
 }

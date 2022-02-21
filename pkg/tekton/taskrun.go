@@ -109,7 +109,11 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 		taskWorkspaces["/workspace/"+w.Name] = workspaces[w.Name]
 	}
 	logrus.Infof("+taskWorkspaces: %+v", taskWorkspaces)
-	for i, step := range t.Steps {
+	mergedSteps, err := v1beta1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
+	if err != nil {
+		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
+	}
+	for i, step := range mergedSteps {
 		logrus.Infof("steps.image: %s", step.Image)
 		ref, err := reference.ParseNormalizedNamed(step.Image)
 		if err != nil {
@@ -241,9 +245,6 @@ func validateTaskSpec(ctx context.Context, t v1beta1.TaskSpec) error {
 	}
 	if len(t.Sidecars) > 0 {
 		return errors.New("Sidecars are not supported")
-	}
-	if t.StepTemplate != nil {
-		return errors.New("StepTemplate not supported")
 	}
 	if len(t.Volumes) > 0 {
 		return errors.New("Volumes not supported")

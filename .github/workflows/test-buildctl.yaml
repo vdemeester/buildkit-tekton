@@ -1,0 +1,37 @@
+name: test
+
+on:
+  push:
+    branches:
+      - master
+      - 'release/**'
+  pull_request:
+
+jobs:
+
+  test-integration-buildctl:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+    - name: "Install test dependencies"
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y moreutils make
+    - name: "Run the integration test"
+      run: |
+        set -x
+        mkdir ${HOME}/bin
+        export PATH=${HOME}/bin:$PATH
+        docker network create buildctl
+        docker run -d --name buildkitd --network buildctl --mount type=bind,source=$(pwd)/hack/buildkitd.toml,target=/etc/buildkit/buildkitd.toml,readonly --privileged moby/buildkit:latest
+        docker cp buildkitd:/usr/bin/buildctl ${HOME}/bin
+        chmod +x ${HOME}/bin/buildctl
+        export BUILDKIT_HOST=docker-container://buildkitd
+        env image_prefix=reg:5000 \
+            DOCKER_ARGS="--network=buildctl" \
+            ./hack/test-buildctl.sh
+    - name: "Show the local images"
+      run: docker images --no-trunc

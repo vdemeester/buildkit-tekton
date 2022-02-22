@@ -11,10 +11,15 @@ mkdir -p "${td}"
 trap 'rm -rf ${td}' EXIT
 cp -a examples "${td}"
 
+DOCKER_ARGS=${DOCKER_ARGS:=}
+
 "$DOCKER" rm -f reg || true
-"$DOCKER" run -d --name reg -p 127.0.0.1:5000:5000 docker.io/library/registry:2
+"$DOCKER" run ${DOCKER_ARGS} -d --name reg -p 127.0.0.1:5000:5000 docker.io/library/registry:2
+
+image_prefix=${image_prefix:-127.0.0.1:5000}
 
 image="127.0.0.1:5000/buildkit-tekton:test-${version}-${timestamp}"
+buildimage="${image_prefix}/buildkit-tekton:test-${version}-${timestamp}"
 "$DOCKER" build -t "$image" -f Dockerfile.docker .
 "$DOCKER" push "$image"
 
@@ -32,7 +37,7 @@ for f in "${td}"/examples/*; do
 			    cat "${sf}"
 		    ) | sponge "${sf}"
             pwd
-            buildctl build --frontend gateway.v0 --opt source=${image} \
+            buildctl build --frontend gateway.v0 --opt source=${buildimage} \
                      --local dockerfile=. --local context=. \
                      --opt filename=$(basename ${sf}) \
                      --output type=image,name=${name}

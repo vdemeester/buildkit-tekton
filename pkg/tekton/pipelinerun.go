@@ -20,33 +20,53 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 		return llb.State{}, err
 	}
 
+	var ps *v1beta1.PipelineSpec
+	if pr.Spec.PipelineSpec != nil {
+		ps = pr.Spec.PipelineSpec
+	} else if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Bundle != "" {
+		resolvedPipeline, err := resolvePipelineInBundle(ctx, c, *pr.Spec.PipelineRef)
+		if err != nil {
+			return llb.State{}, err
+		}
+		ps = &resolvedPipeline.Spec
+	}
+
 	// Interpolation
-	ps, err := applyPipelineRunSubstitution(ctx, pr)
+	spec, err := applyPipelineRunSubstitution(ctx, pr, ps)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
 	}
 
 	// Execution
 	pipelineWorkspaces := map[string]llb.MountOption{}
-	for _, w := range ps.Workspaces {
+	for _, w := range spec.Workspaces {
 		pipelineWorkspaces[w.Name] = llb.AsPersistentCacheDir(pr.Name+"/"+w.Name, llb.CacheMountShared)
 	}
 	logrus.Infof("pipelineWorkspaces: %+v", pipelineWorkspaces)
 	tasks := map[string][]llb.State{}
-	for _, t := range ps.Tasks {
+	for _, t := range spec.Tasks {
 		logrus.Infof("pipelinetask: %s", t.Name)
 		logrus.Infof("pipelinetask: %+v", t)
-		if t.TaskSpec == nil {
-			return llb.State{}, errors.Errorf("%s: TaskRef not supported", t.Name)
+		var ts v1beta1.TaskSpec
+		if t.TaskRef != nil {
+			if t.TaskRef.Bundle != "" {
+				resolvedTask, err := resolveTaskInBundle(ctx, c, *t.TaskRef)
+				if err != nil {
+					return llb.State{}, err
+				}
+				ts = resolvedTask.Spec
+			}
+		} else if t.TaskSpec != nil {
+			ts = t.TaskSpec.TaskSpec
 		}
 
 		logrus.Infof("pipelinetask.TaskSpec: %+v", t.TaskSpec)
-		ts, err := applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
+		ts, err = applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
 			Spec: v1beta1.TaskRunSpec{
 				Params:   t.Params,
-				TaskSpec: &t.TaskSpec.TaskSpec,
+				TaskSpec: &ts,
 			},
-		})
+		}, &ts)
 		if err != nil {
 			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", t.Name)
 		}
@@ -90,9 +110,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 	return ft.File(fa, llb.WithCustomName("[results] buildking image from result (fake)"), llb.IgnoreCache), nil
 }
 
-func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun) (v1beta1.PipelineSpec, error) {
-	ps := pr.Spec.PipelineSpec.DeepCopy()
-
+func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun, ps *v1beta1.PipelineSpec) (v1beta1.PipelineSpec, error) {
 	ps = resources.ApplyParameters(ps, pr)
 	ps = resources.ApplyContexts(ps, "embedded", pr) // FIXME(vdemeester) handle this "embedded" better
 	ps = resources.ApplyWorkspaces(ps, pr)
@@ -112,8 +130,10 @@ func validatePipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) error {
 	if err := pr.Validate(ctx); err != nil {
 		return errors.Wrapf(err, "validation failed for PipelineRun %s", pr.Name)
 	}
-	if pr.Spec.PipelineSpec == nil {
-		return errors.New("PipelineRef not supported")
+	if pr.Spec.PipelineRef != nil {
+		if pr.Spec.PipelineRef.Bundle == "" {
+			return errors.New("PipelineRef is only supported with bundle")
+		}
 	}
 	if len(pr.Spec.Resources) > 0 {
 		return errors.New("PipelineResources are not supported")
@@ -131,8 +151,10 @@ func validatePipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) error {
 	if pr.Spec.TaskRunSpecs != nil {
 		return errors.New("TaskRunSpecs are not supported")
 	}
-	// TODO(vdemeester) bail out on other unsupported field, like PipelineResources, Finally, …
-	return validatePipeline(ctx, *pr.Spec.PipelineSpec)
+	if pr.Spec.PipelineSpec != nil {
+		return validatePipeline(ctx, *pr.Spec.PipelineSpec)
+	}
+	return nil
 }
 
 func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
@@ -143,8 +165,15 @@ func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
 		return errors.New("Finally are not supporte (yet)")
 	}
 	for _, pt := range p.Tasks {
-		if pt.TaskSpec == nil {
-			return errors.Errorf("Task %s: TaskRef not supported", pt.Name)
+		if pt.TaskRef != nil {
+			if pt.TaskRef.Bundle == "" {
+				return errors.New("TaskRef is only supported with bundle")
+			}
+		}
+		if pt.TaskRef != nil {
+			if pt.TaskRef.Bundle == "" {
+				return errors.New("TaskRef is only supported with bundle")
+			}
 		}
 		if len(pt.Conditions) > 0 {
 			return errors.Errorf("Task %s: Conditions not supported", pt.Name)
@@ -156,11 +185,13 @@ func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
 		if pt.Timeout != nil {
 			return errors.Errorf("Task % s: Timeout not supported", pt.Name)
 		}
-		if !isTektonTask(pt.TaskSpec.TypeMeta) {
-			return errors.Errorf("Task %s: Custom task not supported", pt.Name)
-		}
-		if err := validateTaskSpec(ctx, pt.TaskSpec.TaskSpec); err != nil {
-			return err
+		if pt.TaskSpec != nil {
+			if !isTektonTask(pt.TaskSpec.TypeMeta) {
+				return errors.Errorf("Task %s: Custom task not supported", pt.Name)
+			}
+			if err := validateTaskSpec(ctx, pt.TaskSpec.TaskSpec); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

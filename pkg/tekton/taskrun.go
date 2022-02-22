@@ -33,24 +33,36 @@ type pstep struct {
 type mountOptionFn func(llb.State) llb.RunOption
 
 func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (llb.State, error) {
+	var err error
 	// Validation
-	if err := validateTaskRun(ctx, tr); err != nil {
+	if err = validateTaskRun(ctx, tr); err != nil {
 		return llb.State{}, err
 	}
 
+	var ts *v1beta1.TaskSpec
+	if tr.Spec.TaskSpec != nil {
+		ts = tr.Spec.TaskSpec
+	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Bundle != "" {
+		resolvedTask, err := resolveTaskInBundle(ctx, c, *tr.Spec.TaskRef)
+		if err != nil {
+			return llb.State{}, err
+		}
+		ts = &resolvedTask.Spec
+	}
+
 	// Interpolation
-	ts, err := applyTaskRunSubstitution(ctx, tr)
+	spec, err := applyTaskRunSubstitution(ctx, tr, ts)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
 	}
-	logrus.Infof("TaskSpec: %+v", ts)
+	logrus.Infof("TaskSpec: %+v", spec)
 
 	// Execution
 	workspaces := map[string]llb.MountOption{}
 	for _, w := range tr.Spec.Workspaces {
 		workspaces[w.Name] = llb.AsPersistentCacheDir(tr.Name+"/"+w.Name, llb.CacheMountShared)
 	}
-	steps, err := taskSpecToPSteps(ctx, c, ts, tr.Name, workspaces)
+	steps, err := taskSpecToPSteps(ctx, c, spec, tr.Name, workspaces)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to builtkit llb")
 	}
@@ -64,9 +76,7 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 	return stepStates[len(stepStates)-1], nil
 }
 
-func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun) (v1beta1.TaskSpec, error) {
-	ts := tr.Spec.TaskSpec.DeepCopy()
-
+func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec) (v1beta1.TaskSpec, error) {
 	var defaults []v1beta1.ParamSpec
 	if len(ts.Params) > 0 {
 		defaults = append(defaults, ts.Params...)
@@ -230,13 +240,18 @@ func validateTaskRun(ctx context.Context, tr *v1beta1.TaskRun) error {
 	if err := tr.Validate(ctx); err != nil {
 		return errors.Wrapf(err, "validation failed for Taskrun %s", tr.Name)
 	}
-	if tr.Spec.TaskSpec == nil {
-		return errors.New("TaskRef not supported")
+	if tr.Spec.TaskRef != nil {
+		if tr.Spec.TaskRef.Bundle == "" {
+			return errors.New("TaskRef is only supported with bundle")
+		}
 	}
 	if tr.Spec.PodTemplate != nil {
 		return errors.New("PodTemplate not supported")
 	}
-	return validateTaskSpec(ctx, *tr.Spec.TaskSpec)
+	if tr.Spec.TaskSpec != nil {
+		return validateTaskSpec(ctx, *tr.Spec.TaskSpec)
+	}
+	return nil
 }
 
 func validateTaskSpec(ctx context.Context, t v1beta1.TaskSpec) error {

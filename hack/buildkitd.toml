@@ -1,0 +1,5 @@
+debug = true
+
+[registry."reg:5000"]
+  http = true
+  insecure = true

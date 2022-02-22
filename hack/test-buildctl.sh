@@ -31,7 +31,11 @@ for f in "${td}"/examples/*; do
 			    echo "#syntax=${image}"
 			    cat "${sf}"
 		    ) | sponge "${sf}"
-            buildctl build --frontend dockerfile.v0 --local dockerfile=. --local context=. --opt filename=${sf} --output type=image,name=${name}
+            pwd
+            buildctl build --frontend gateway.v0 --opt source=${image} \
+                     --local dockerfile=. --local context=. \
+                     --opt filename=$(basename ${sf}) \
+                     --output type=image,name=${name}
         done
 	)
 done

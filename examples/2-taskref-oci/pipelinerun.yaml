@@ -1,0 +1,35 @@
+#syntax=quay.io/vdemeest/buildkit-tekton
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: golang-test-pipeline-run
+spec:
+  pipelineSpec:
+    workspaces:
+      - name: shared-workspace
+    tasks:
+      - name: fetch-repository
+        taskRef:
+          name: git-clone
+          bundle: gcr.io/tekton-releases/catalog/upstream/git-clone:0.5
+        workspaces:
+          - name: output
+            workspace: shared-workspace
+        params:
+          - name: url
+            value: https://github.com/vdemeester/go-helloworld-app
+      - name: run-test
+        taskRef:
+          name: golang-test
+          bundle: gcr.io/tekton-releases/catalog/upstream/golang-test:0.2
+        runAfter:
+          - fetch-repository
+        workspaces:
+          - name: source
+            workspace: shared-workspace
+        params:
+          - name: package
+            value: https://github.com/vdemeester/go-helloworld-app
+  workspaces:
+    - name: shared-workspace
+      emptyDir: {}

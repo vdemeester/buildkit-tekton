@@ -9,9 +9,6 @@ import (
 	"github.com/vdemeester/buildkit-tekton/pkg/build"
 )
 
-var fgraph bool
-var ffilename string
-
 func main() {
 	flag.Parse()
 

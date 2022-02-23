@@ -31,7 +31,10 @@ for f in "${td}"/examples/*; do
 			    echo "#syntax=${image}"
 			    cat "${sf}"
 		    ) | sponge "${sf}"
-		    "$DOCKER" build -t "${name}" -f "${sf}" .
+		    "$DOCKER" build \
+                      --build-arg=enable-tekton-oci-bundles=true \
+                      -t "${name}" \
+                      -f "${sf}" .
         done
 	)
 done

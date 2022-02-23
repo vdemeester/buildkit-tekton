@@ -55,7 +55,6 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
 	}
-	logrus.Infof("TaskSpec: %+v", spec)
 
 	// Execution
 	workspaces := map[string]llb.MountOption{}
@@ -118,7 +117,6 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 	for _, w := range t.Workspaces {
 		taskWorkspaces["/workspace/"+w.Name] = workspaces[w.Name]
 	}
-	logrus.Infof("+taskWorkspaces: %+v", taskWorkspaces)
 	mergedSteps, err := v1beta1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
 	if err != nil {
 		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
@@ -175,7 +173,6 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 		if step.SecurityContext != nil {
 			if step.SecurityContext.RunAsUser != nil {
 				user := fmt.Sprintf("%d", *step.SecurityContext.RunAsUser)
-				logrus.Infof("user: %s", user)
 				runOptions = append(runOptions,
 					llb.With(llb.User(user)),
 				)

@@ -40,6 +40,7 @@ for f in "${td}"/examples/*; do
             buildctl build --frontend gateway.v0 --opt source=${buildimage} \
                      --local dockerfile=. --local context=. \
                      --opt filename=$(basename ${sf}) \
+                     --opt enable-tekton-oci-bundles=true \
                      --output type=image,name=${name}
         done
 	)

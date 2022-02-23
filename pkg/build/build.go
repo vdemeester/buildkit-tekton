@@ -7,7 +7,7 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/dockerfile2llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/tektoncd/pipeline/pkg/apis/config"
+	"github.com/vdemeester/buildkit-tekton/pkg/config"
 	"github.com/vdemeester/buildkit-tekton/pkg/tekton"
 )
 
@@ -18,19 +18,18 @@ const (
 )
 
 func Build(ctx context.Context, c client.Client) (*client.Result, error) {
-	// Enable Tekton OCI Bundles
-	// FIXME(vdemeester) Have an option to enable this
-	ctx = config.ToContext(ctx, &config.Config{
-		Defaults: &config.Defaults{},
-		FeatureFlags: &config.FeatureFlags{
-			EnableTektonOCIBundles: true,
-		},
-	})
-	cfg, err := GetTektonResource(ctx, c)
+	// Handle opts AND build-args
+	cfg, err := config.Parse(c.BuildOpts())
+	if err != nil {
+		return nil, errors.Wrap(err, "failed loading options")
+	}
+
+	ctx = cfg.ToContext(ctx)
+	resource, err := GetTektonResource(ctx, c)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting tekton task")
 	}
-	st, err := tekton.TektonToLLB(c)(ctx, cfg)
+	st, err := tekton.TektonToLLB(c)(ctx, resource)
 	if err != nil {
 		return nil, err
 	}

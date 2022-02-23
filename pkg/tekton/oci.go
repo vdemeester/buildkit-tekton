@@ -6,7 +6,6 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
@@ -67,7 +66,6 @@ func resolveBundle(ctx context.Context, c client.Client, bundle, name string) (r
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to resolve %s in oci bundle: %s", name, bundle)
 	}
-	logrus.Infof("dt: %s", string(dt))
 	decoder := k8scheme.Codecs.UniversalDeserializer()
 	obj, _, err := decoder.Decode(dt, nil, nil)
 	if err != nil {

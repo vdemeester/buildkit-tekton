@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// PipelineRunToLLB converts a PipelineRun into a BuildKit LLB State.
 func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.PipelineRun) (llb.State, error) {
 	// Validation
 	if err := validatePipelineRun(ctx, pr); err != nil {

@@ -17,6 +17,9 @@ const (
 	defaultTaskName     = "task.yaml"
 )
 
+// Build is the "core" of the frontend.
+// From the client, it parses the options, get the resources, translate them to BuildKit LLB
+// and "solve" it (aka send it to BuildKit).
 func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 	// Handle opts AND build-args
 	cfg, err := config.Parse(c.BuildOpts())
@@ -54,6 +57,8 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 	return res, nil
 }
 
+// GetTektonResource reads the specified tekton resource (TaskRun, Pipeline today), and
+// returns it as a string.
 func GetTektonResource(ctx context.Context, c client.Client) (string, error) {
 	opts := c.BuildOpts().Opts
 	filename := opts[keyFilename]

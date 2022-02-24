@@ -17,6 +17,8 @@ type types struct {
 	TaskRuns     []*v1beta1.TaskRun
 }
 
+// TektonToLLB returns a function that converts a string representing a Tekton resource
+// into a BuildKit LLB State.
 // Only support TaskRun with embedded Task to start.
 func TektonToLLB(c client.Client) func(context.Context, string) (llb.State, error) {
 	return func(ctx context.Context, l string) (llb.State, error) {

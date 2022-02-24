@@ -32,6 +32,7 @@ type pstep struct {
 
 type mountOptionFn func(llb.State) llb.RunOption
 
+// TaskRunToLLB converts a TaskRun into a BuildKit LLB State.
 func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (llb.State, error) {
 	var err error
 	// Validation

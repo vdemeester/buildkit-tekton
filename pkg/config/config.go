@@ -10,11 +10,14 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 )
 
+// Config holds the frontend configuration options.
+// It "brings" some from upstream tekton own set of configuration.
 type Config struct {
 	Defaults     config.Defaults
 	FeatureFlags config.FeatureFlags
 }
 
+// Parse converts BuildKit BuildOpts into a Config object
 func Parse(opts client.BuildOpts) (*Config, error) {
 	logrus.Infof("opts: %+v", opts)
 	c := &Config{}
@@ -42,6 +45,7 @@ func Parse(opts client.BuildOpts) (*Config, error) {
 	return c, nil
 }
 
+// ToContext enriches a context with Tekton configuration object
 func (c *Config) ToContext(ctx context.Context) context.Context {
 	return config.ToContext(ctx, &config.Config{
 		Defaults:     &c.Defaults,

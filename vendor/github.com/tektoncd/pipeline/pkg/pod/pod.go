@@ -156,12 +156,19 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 
 	// Initialize any workingDirs under /workspace.
-	if workingDirInit := workingDirInit(b.Images.ShellImage, stepContainers); workingDirInit != nil {
+	if workingDirInit := workingDirInit(b.Images.WorkingDirInitImage, stepContainers); workingDirInit != nil {
 		initContainers = append(initContainers, *workingDirInit)
 	}
 
+	// By default, use an empty pod template and take the one defined in the task run spec if any
+	podTemplate := pod.Template{}
+
+	if taskRun.Spec.PodTemplate != nil {
+		podTemplate = *taskRun.Spec.PodTemplate
+	}
+
 	// Resolve entrypoint for any steps that don't specify command.
-	stepContainers, err = resolveEntrypoints(ctx, b.EntrypointCache, taskRun.Namespace, taskRun.Spec.ServiceAccountName, stepContainers)
+	stepContainers, err = resolveEntrypoints(ctx, b.EntrypointCache, taskRun.Namespace, taskRun.Spec.ServiceAccountName, podTemplate.ImagePullSecrets, stepContainers)
 	if err != nil {
 		return nil, err
 	}
@@ -259,13 +266,6 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	// isolation.
 	for i, s := range stepContainers {
 		stepContainers[i].Name = names.SimpleNameGenerator.RestrictLength(StepName(s.Name, i))
-	}
-
-	// By default, use an empty pod template and take the one defined in the task run spec if any
-	podTemplate := pod.Template{}
-
-	if taskRun.Spec.PodTemplate != nil {
-		podTemplate = *taskRun.Spec.PodTemplate
 	}
 
 	// Add podTemplate Volumes to the explicitly declared use volumes

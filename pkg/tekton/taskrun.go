@@ -85,7 +85,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1be
 	ts = resources.ApplyParameters(ts, tr, defaults...)
 
 	// Apply context substitution from the taskrun
-	ts = resources.ApplyContexts(ts, &resources.ResolvedTaskResources{TaskName: "embedded"}, tr) // FIXME(vdemeester) handle this "embedded" better
+	ts = resources.ApplyContexts(ts, "embedded", tr) // FIXME(vdemeester) handle task name here (in case of TaskRef)
 
 	// TODO(vdemeester) support PipelineResource ?
 	// Apply bound resource substitution from the taskrun.

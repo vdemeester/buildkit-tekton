@@ -48,3 +48,9 @@ $ docker build -t foo -f examples/simple/taskrun.yaml .
  => => exporting layers                                                     0.0s
  => => writing image sha256:495bfb85d97b833881ea1823414db581e4b2876edb41e2  0.0s
 ```
+
+The same `PipelineRun` on `buildkit-tekton` and in a kubernetes
+cluster with tekton installed (both without pre-cached images, … and
+with approximately the same hardware)
+- `buildkit-tekton`: 4m5s
+- `tekton` in `k8s`: 7m

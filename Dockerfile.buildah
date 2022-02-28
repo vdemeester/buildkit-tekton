@@ -11,4 +11,4 @@ RUN go build -trimpath -ldflags "-s -w" -o /out/buildkit-tekton ./cmd/buildkit-t
 FROM scratch
 COPY --from=build /out/ /
 LABEL moby.buildkit.frontend.network.none="true"
-ENTRYPOINT ["/buildkit-tekton", "frontend"]
+ENTRYPOINT ["/buildkit-tekton"]

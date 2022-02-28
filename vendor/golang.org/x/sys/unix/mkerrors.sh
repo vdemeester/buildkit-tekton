@@ -205,6 +205,7 @@ struct ltchars {
 #include <linux/bpf.h>
 #include <linux/can.h>
 #include <linux/can/error.h>
+#include <linux/can/netlink.h>
 #include <linux/can/raw.h>
 #include <linux/capability.h>
 #include <linux/cryptouser.h>
@@ -597,6 +598,7 @@ ccflags="$@"
 		$2 ~ /^DEVLINK_/ ||
 		$2 ~ /^ETHTOOL_/ ||
 		$2 ~ /^LWTUNNEL_IP/ ||
+		$2 ~ /^ITIMER_/ ||
 		$2 !~ "WMESGLEN" &&
 		$2 ~ /^W[A-Z0-9]+$/ ||
 		$2 ~/^PPPIOC/ ||

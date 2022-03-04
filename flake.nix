@@ -40,7 +40,7 @@
             vendorSha256 = null;
           };
           tkn-local-run = pkgs.buildGo117Module {
-            pname = "buildkit-tekton";
+            pname = "tkn-local-run";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree
             # in the Nix store.

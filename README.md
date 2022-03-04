@@ -31,22 +31,26 @@ No options yet, but there will be a lot.
 There is a [examples](./examples) folder to try things out.
 
 ```bash
-$ docker build -t foo -f examples/simple/taskrun.yaml .
-[+] Building 1.4s (10/10) FINISHED                                                => [internal] load build definition from task.yaml                         0.0s
- => => transferring dockerfile: 1.06kB                                      0.0s
- => [internal] load .dockerignore                                           0.0s
- => => transferring context: 2B                                             0.0s
- => resolve image config for quay.io/vdemeest/buildkit-tekton:v0.0.1        0.0s
- => CACHED docker-image://quay.io/vdemeest/buildkit-tekton:v0.0.1           0.0s
- => [internal] load tekton                                                  0.0s
- => => transferring dockerfile: 1.06kB                                      0.0s
- => CACHED docker-image://docker.io/library/bash:latest                     0.0s
- => /usr/local/bin/bash -c date +%s | tee /tekton/results/current-date-uni  0.4s
- => /usr/local/bin/bash -c date | tee /tekton/results/current-date-unix-ti  0.4s
- => /usr/local/bin/bash -c ls -l /; ls -l /tekton/results/; ls -l /tekton-  0.3s
- => exporting to image                                                      0.0s
- => => exporting layers                                                     0.0s
- => => writing image sha256:495bfb85d97b833881ea1823414db581e4b2876edb41e2  0.0s
+❯ docker build -t foo -f examples/0-taskrun-simple/run.yaml .
+[+] Building 2.9s (11/11) FINISHED
+ => [internal] load build definition from run.yaml                                                                   0.0s
+ => => transferring dockerfile: 35B                                                                                  0.0s
+ => [internal] load .dockerignore                                                                                    0.0s
+ => => transferring context: 34B                                                                                     0.0s
+ => resolve image config for quay.io/vdemeest/buildkit-tekton:latest                                                 0.0s
+ => CACHED docker-image://quay.io/vdemeest/buildkit-tekton:latest                                                    0.0s
+ => [internal] load tekton from run.yaml                                                                             0.0s
+ => => transferring dockerfile: 131B                                                                                 0.0s
+ => resolve image config for docker.io/library/bash:latest                                                           0.2s
+ => CACHED load metadata from +docker.io/library/bash:latest                                                         0.0s
+ => => resolve docker.io/library/bash:latest                                                                         0.1s
+ => simple-task-generated/print-date-unix-timestamp                                                                  0.3s
+ => simple-task-generated/print-date-human-readable                                                                  0.3s
+ => simple-task-generated/list-results                                                                               0.3s
+ => exporting to image                                                                                               0.0s
+ => => exporting layers                                                                                              0.0s
+ => => writing image sha256:2bbb3dfbce5e7b4e07672cdd39dda83d0079a90d21914768cb0aff6329533053                         0.0s
+ => => naming to docker.io/library/foo                                                                               0.0s
 ```
 
 The same `PipelineRun` on `buildkit-tekton` and in a kubernetes

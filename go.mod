@@ -14,7 +14,7 @@ require (
 	github.com/moby/buildkit v0.9.3
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
-	github.com/tektoncd/pipeline v0.33.1
+	github.com/tektoncd/pipeline v0.33.2
 	k8s.io/api v0.23.4
 	k8s.io/apimachinery v0.23.4
 	k8s.io/client-go v1.5.2

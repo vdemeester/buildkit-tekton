@@ -10,7 +10,6 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/names"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
@@ -33,8 +32,9 @@ type pstep struct {
 type mountOptionFn func(llb.State) llb.RunOption
 
 // TaskRunToLLB converts a TaskRun into a BuildKit LLB State.
-func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (llb.State, error) {
+func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, error) {
 	var err error
+	tr := r.main
 	// Validation
 	if err = validateTaskRun(ctx, tr); err != nil {
 		return llb.State{}, err
@@ -49,6 +49,13 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 			return llb.State{}, err
 		}
 		ts = &resolvedTask.Spec
+	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Name != "" {
+		t, ok := r.tasks[tr.Spec.TaskRef.Name]
+		if !ok {
+			return llb.State{}, errors.Errorf("Taskref %s not found in context", tr.Spec.TaskRef.Name)
+		}
+		t.SetDefaults(ctx)
+		ts = &t.Spec
 	}
 
 	// Interpolation
@@ -68,7 +75,6 @@ func TaskRunToLLB(ctx context.Context, c client.Client, tr *v1beta1.TaskRun) (ll
 	}
 
 	resultState := llb.Scratch()
-	logrus.Infof("steps: %+v", steps)
 	stepStates, err := pstepToState(c, steps, resultState, []llb.RunOption{})
 	if err != nil {
 		return llb.State{}, err
@@ -123,14 +129,13 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
 	}
 	for i, step := range mergedSteps {
-		logrus.Infof("steps.image: %s", step.Image)
 		ref, err := reference.ParseNormalizedNamed(step.Image)
 		if err != nil {
 			return steps, err
 		}
 		runOptions := []llb.RunOption{
 			llb.IgnoreCache,
-			llb.WithCustomName(name + "/" + step.Name),
+			llb.WithCustomName("[tekton] " + name + "/" + step.Name),
 		}
 		if step.Script != "" {
 			// Check for a shebang, and add a default if it's not set.
@@ -148,7 +153,7 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 			data := script
 			scriptSt := llb.Scratch().Dir("/").File(
 				llb.Mkfile(filename, 0755, []byte(data)),
-				llb.WithCustomName(name+"/"+step.Name+": preparing script"),
+				llb.WithCustomName("[tekton] "+name+"/"+step.Name+": preparing script"),
 			)
 			runOptions = append(runOptions,
 				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath(sourcePath), llb.Readonly),
@@ -198,8 +203,6 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 func pstepToState(c client.Client, steps []pstep, resultState llb.State, additionnalMounts []llb.RunOption) ([]llb.State, error) {
 	stepStates := make([]llb.State, len(steps))
 	for i, step := range steps {
-		logrus.Infof("step-%d: %s", i, step.name)
-		logrus.Infof("step-%d: %s", i, step.image)
 		runOptions := step.runOptions
 		mounts := make([]llb.RunOption, len(step.results))
 		for i, r := range step.results {
@@ -214,7 +217,6 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 			)
 		}
 		for workspacePath, workspaceOptions := range step.workspaces {
-			logrus.Infof("Mount in %s: %+v", workspacePath, workspaceOptions)
 			mounts = append(mounts,
 				llb.AddMount(workspacePath, stepStates[i], workspaceOptions),
 			)
@@ -222,7 +224,7 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 		runOptions = append(runOptions, mounts...)
 		runOptions = append(runOptions, additionnalMounts...)
 		state := llb.
-			Image(step.image, llb.WithMetaResolver(c), llb.WithCustomName("load metadata from +"+step.image)).
+			Image(step.image, llb.WithMetaResolver(c)).
 			Run(runOptions...).
 			Root()
 		stepStates[i] = state
@@ -237,11 +239,6 @@ func validateTaskRun(ctx context.Context, tr *v1beta1.TaskRun) error {
 	tr.SetDefaults(ctx)
 	if err := tr.Validate(ctx); err != nil {
 		return errors.Wrapf(err, "validation failed for Taskrun %s", tr.Name)
-	}
-	if tr.Spec.TaskRef != nil {
-		if tr.Spec.TaskRef.Bundle == "" {
-			return errors.New("TaskRef is only supported with bundle")
-		}
 	}
 	if tr.Spec.PodTemplate != nil {
 		return errors.New("PodTemplate not supported")

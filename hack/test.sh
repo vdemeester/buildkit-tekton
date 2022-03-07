@@ -25,16 +25,18 @@ for f in "${td}"/examples/*; do
 		cd "$f"
         for sf in "${f}"/*.yaml; do
             sname="$(basename "${sf}")"
-            echo "---- ${sname} ----"
-		    sed -i '1 s/^ *#*syntax*=.*$//' "${sf}"
-		    (
-			    echo "#syntax=${image}"
-			    cat "${sf}"
-		    ) | sponge "${sf}"
-		    "$DOCKER" build \
-                      --build-arg=enable-tekton-oci-bundles=true \
-                      -t "${name}" \
-                      -f "${sf}" .
+            if [[ ${sname} == *"run"* ]]; then
+                echo "---- ${sname} ----"
+		        sed -i '1 s/^ *#*syntax*=.*$//' "${sf}"
+		        (
+			        echo "#syntax=${image}"
+			        cat "${sf}"
+		        ) | sponge "${sf}"
+		        "$DOCKER" build \
+                          --build-arg=enable-tekton-oci-bundles=true \
+                          -t "${name}" \
+                          -f "${sf}" .
+            fi
         done
 	)
 done

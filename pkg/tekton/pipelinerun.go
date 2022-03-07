@@ -8,14 +8,14 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/resources"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // PipelineRunToLLB converts a PipelineRun into a BuildKit LLB State.
-func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.PipelineRun) (llb.State, error) {
+func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.State, error) {
+	pr := r.main
 	// Validation
 	if err := validatePipelineRun(ctx, pr); err != nil {
 		return llb.State{}, err
@@ -30,6 +30,13 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 			return llb.State{}, err
 		}
 		ps = &resolvedPipeline.Spec
+	} else if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Name != "" {
+		p, ok := r.pipelines[pr.Spec.PipelineRef.Name]
+		if !ok {
+			return llb.State{}, errors.Errorf("PipelineRef %s not found in context", pr.Spec.PipelineRef.Name)
+		}
+		ps.SetDefaults(ctx)
+		ps = &p.Spec
 	}
 
 	// Interpolation
@@ -45,7 +52,6 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 	}
 	tasks := map[string][]llb.State{}
 	for _, t := range spec.Tasks {
-		logrus.Infof("Task: %s", t.Name)
 		var ts v1beta1.TaskSpec
 		if t.TaskRef != nil {
 			if t.TaskRef.Bundle != "" {
@@ -54,6 +60,13 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 					return llb.State{}, err
 				}
 				ts = resolvedTask.Spec
+			} else {
+				task, ok := r.tasks[t.TaskRef.Name]
+				if !ok {
+					return llb.State{}, errors.Errorf("Taskref %s not found in context", t.TaskRef.Name)
+				}
+				task.SetDefaults(ctx)
+				ts = task.Spec
 			}
 		} else if t.TaskSpec != nil {
 			ts = t.TaskSpec.TaskSpec
@@ -102,7 +115,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, pr *v1beta1.Pipeline
 		taskPath := fmt.Sprintf("/task/%s", n)
 		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
 	}
-	return ft.File(fa, llb.WithCustomName("[results] buildking image from result (fake)"), llb.IgnoreCache), nil
+	return ft.File(fa, llb.WithCustomName("[tekton] buildking image from result (fake)"), llb.IgnoreCache), nil
 }
 
 func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun, ps *v1beta1.PipelineSpec) (v1beta1.PipelineSpec, error) {
@@ -124,11 +137,6 @@ func validatePipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) error {
 	pr.SetDefaults(ctx)
 	if err := pr.Validate(ctx); err != nil {
 		return errors.Wrapf(err, "validation failed for PipelineRun %s", pr.Name)
-	}
-	if pr.Spec.PipelineRef != nil {
-		if pr.Spec.PipelineRef.Bundle == "" {
-			return errors.New("PipelineRef is only supported with bundle")
-		}
 	}
 	if len(pr.Spec.Resources) > 0 {
 		return errors.New("PipelineResources are not supported")
@@ -160,16 +168,6 @@ func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
 		return errors.New("Finally are not supporte (yet)")
 	}
 	for _, pt := range p.Tasks {
-		if pt.TaskRef != nil {
-			if pt.TaskRef.Bundle == "" {
-				return errors.New("TaskRef is only supported with bundle")
-			}
-		}
-		if pt.TaskRef != nil {
-			if pt.TaskRef.Bundle == "" {
-				return errors.New("TaskRef is only supported with bundle")
-			}
-		}
 		if len(pt.Conditions) > 0 {
 			return errors.Errorf("Task %s: Conditions not supported", pt.Name)
 		}

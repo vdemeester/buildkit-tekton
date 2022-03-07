@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/moby/buildkit/frontend/gateway/client"
-	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 )
 
@@ -19,11 +18,9 @@ type Config struct {
 
 // Parse converts BuildKit BuildOpts into a Config object
 func Parse(opts client.BuildOpts) (*Config, error) {
-	logrus.Infof("opts: %+v", opts)
 	c := &Config{}
 
 	for name, value := range opts.Opts {
-		logrus.Infof("%s: %s", name, value)
 		// we use --build-arg to pass option through "docker build"
 		// so we need to strip it to get the "real" option
 		if strings.HasPrefix(name, "build-arg:") {

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/frontend/dockerfile/dockerfile2llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
 	"github.com/vdemeester/buildkit-tekton/pkg/config"
@@ -30,9 +29,13 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 	ctx = cfg.ToContext(ctx)
 	resource, err := GetTektonResource(ctx, c)
 	if err != nil {
-		return nil, errors.Wrap(err, "getting tekton task")
+		return nil, errors.Wrap(err, "getting tekton resource")
 	}
-	st, err := tekton.TektonToLLB(c)(ctx, resource)
+	contextResources, err := GetContextResources(ctx, c)
+	if err != nil {
+		return nil, errors.Wrap(err, "getting context resource")
+	}
+	st, err := tekton.TektonToLLB(c)(ctx, resource, contextResources)
 	if err != nil {
 		return nil, err
 	}
@@ -66,16 +69,14 @@ func GetTektonResource(ctx context.Context, c client.Client) (string, error) {
 		filename = defaultTaskName
 	}
 
-	name := "load tekton"
+	name := "load resource(s)"
 	if filename != "task.yaml" {
 		name += " from " + filename
 	}
 
 	src := llb.Local(localNameDockerfile,
-		// llb.IncludePatterns([]string{filename, "*"}),
 		llb.SessionID(c.BuildOpts().SessionID),
-		// llb.SharedKeyHint(defaultTaskName),
-		dockerfile2llb.WithInternalName(name),
+		llb.WithCustomName("[tekton] "+name),
 	)
 
 	def, err := src.Marshal(ctx)
@@ -104,4 +105,45 @@ func GetTektonResource(ctx context.Context, c client.Client) (string, error) {
 	}
 
 	return string(dtDockerfile), nil
+}
+
+// GetContextResources reads all yamls from the context and returns it
+// as an array of string.
+func GetContextResources(ctx context.Context, c client.Client) ([]string, error) {
+	resources := []string{}
+	buildContext := llb.Local("context",
+		llb.IncludePatterns([]string{"*.yml", "*.yaml"}),
+		llb.SessionID(c.BuildOpts().SessionID),
+		llb.WithCustomName("[tekton] load yaml files from context"),
+	)
+	def, err := buildContext.Marshal(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to load context files")
+	}
+	res, err := c.Solve(ctx, client.SolveRequest{
+		Definition: def.ToPB(),
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to load context files")
+	}
+
+	ref, err := res.SingleRef()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to load context files")
+	}
+
+	dirs, err := ref.ReadDir(ctx, client.ReadDirRequest{Path: ""})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to load context files")
+	}
+	for _, d := range dirs {
+		data, err := ref.ReadFile(ctx, client.ReadRequest{
+			Filename: d.Path,
+		})
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to read %s from context files", d.Path)
+		}
+		resources = append(resources, string(data))
+	}
+	return resources, nil
 }

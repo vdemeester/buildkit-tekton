@@ -30,18 +30,20 @@ for f in "${td}"/examples/*; do
 		cd "$f"
         for sf in "${f}"/*.yaml; do
             sname="$(basename "${sf}")"
-            echo "---- ${sname} ----"
-		    sed -i '1 s/^ *#*syntax*=.*$//' "${sf}"
-		    (
-			    echo "#syntax=${image}"
-			    cat "${sf}"
-		    ) | sponge "${sf}"
-            pwd
-            buildctl build --frontend gateway.v0 --opt source=${buildimage} \
-                     --local dockerfile=. --local context=. \
-                     --opt filename=$(basename ${sf}) \
-                     --opt enable-tekton-oci-bundles=true \
-                     --output type=image,name=${name}
+            if [[ ${sname} == *"run"* ]]; then
+                echo "---- ${sname} ----"
+		        sed -i '1 s/^ *#*syntax*=.*$//' "${sf}"
+		        (
+			        echo "#syntax=${image}"
+			        cat "${sf}"
+		        ) | sponge "${sf}"
+                pwd
+                buildctl build --frontend gateway.v0 --opt source=${buildimage} \
+                         --local dockerfile=. --local context=. \
+                         --opt filename=$(basename ${sf}) \
+                         --opt enable-tekton-oci-bundles=true \
+                         --output type=image,name=${name}
+            fi
         done
 	)
 done

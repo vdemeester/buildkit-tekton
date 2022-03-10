@@ -43,6 +43,7 @@ type mount struct {
 	selector     string
 	cacheID      string
 	tmpfs        bool
+	tmpfsOpt     TmpfsInfo
 	cacheSharing CacheMountSharingMode
 	noOutput     bool
 }
@@ -185,13 +186,20 @@ func (e *ExecOp) Marshal(ctx context.Context, c *Constraints) (digest.Digest, []
 		return "", nil, nil, nil, err
 	}
 
-	meta := &pb.Meta{
-		Args:     args,
-		Env:      env.ToArray(),
-		Cwd:      cwd,
-		User:     user,
-		Hostname: hostname,
+	cgrpParent, err := getCgroupParent(e.base)(ctx, c)
+	if err != nil {
+		return "", nil, nil, nil, err
 	}
+
+	meta := &pb.Meta{
+		Args:         args,
+		Env:          env.ToArray(),
+		Cwd:          cwd,
+		User:         user,
+		Hostname:     hostname,
+		CgroupParent: cgrpParent,
+	}
+
 	extraHosts, err := getExtraHosts(e.base)(ctx, c)
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -202,6 +210,23 @@ func (e *ExecOp) Marshal(ctx context.Context, c *Constraints) (digest.Digest, []
 			hosts[i] = &pb.HostIP{Host: h.Host, IP: h.IP.String()}
 		}
 		meta.ExtraHosts = hosts
+	}
+
+	ulimits, err := getUlimit(e.base)(ctx, c)
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	if len(ulimits) > 0 {
+		addCap(&e.constraints, pb.CapExecMetaUlimit)
+		ul := make([]*pb.Ulimit, len(ulimits))
+		for i, u := range ulimits {
+			ul[i] = &pb.Ulimit{
+				Name: u.Name,
+				Soft: u.Soft,
+				Hard: u.Hard,
+			}
+		}
+		meta.Ulimit = ul
 	}
 
 	network, err := getNetwork(e.base)(ctx, c)
@@ -249,6 +274,9 @@ func (e *ExecOp) Marshal(ctx context.Context, c *Constraints) (digest.Digest, []
 			addCap(&e.constraints, pb.CapExecMountCacheSharing)
 		} else if m.tmpfs {
 			addCap(&e.constraints, pb.CapExecMountTmpfs)
+			if m.tmpfsOpt.Size > 0 {
+				addCap(&e.constraints, pb.CapExecMountTmpfsSize)
+			}
 		} else if m.source != nil {
 			addCap(&e.constraints, pb.CapExecMountBind)
 		}
@@ -256,6 +284,12 @@ func (e *ExecOp) Marshal(ctx context.Context, c *Constraints) (digest.Digest, []
 
 	if len(e.secrets) > 0 {
 		addCap(&e.constraints, pb.CapExecMountSecret)
+		for _, s := range e.secrets {
+			if s.IsEnv {
+				addCap(&e.constraints, pb.CapExecSecretEnv)
+				break
+			}
+		}
 	}
 
 	if len(e.ssh) > 0 {
@@ -333,23 +367,34 @@ func (e *ExecOp) Marshal(ctx context.Context, c *Constraints) (digest.Digest, []
 		}
 		if m.tmpfs {
 			pm.MountType = pb.MountType_TMPFS
+			pm.TmpfsOpt = &pb.TmpfsOpt{
+				Size_: m.tmpfsOpt.Size,
+			}
 		}
 		peo.Mounts = append(peo.Mounts, pm)
 	}
 
 	for _, s := range e.secrets {
-		pm := &pb.Mount{
-			Dest:      s.Target,
-			MountType: pb.MountType_SECRET,
-			SecretOpt: &pb.SecretOpt{
+		if s.IsEnv {
+			peo.Secretenv = append(peo.Secretenv, &pb.SecretEnv{
 				ID:       s.ID,
-				Uid:      uint32(s.UID),
-				Gid:      uint32(s.GID),
+				Name:     s.Target,
 				Optional: s.Optional,
-				Mode:     uint32(s.Mode),
-			},
+			})
+		} else {
+			pm := &pb.Mount{
+				Dest:      s.Target,
+				MountType: pb.MountType_SECRET,
+				SecretOpt: &pb.SecretOpt{
+					ID:       s.ID,
+					Uid:      uint32(s.UID),
+					Gid:      uint32(s.GID),
+					Optional: s.Optional,
+					Mode:     uint32(s.Mode),
+				},
+			}
+			peo.Mounts = append(peo.Mounts, pm)
 		}
-		peo.Mounts = append(peo.Mounts, pm)
 	}
 
 	for _, s := range e.ssh {
@@ -453,10 +498,35 @@ func AsPersistentCacheDir(id string, sharing CacheMountSharingMode) MountOption 
 	}
 }
 
-func Tmpfs() MountOption {
+func Tmpfs(opts ...TmpfsOption) MountOption {
 	return func(m *mount) {
+		t := &TmpfsInfo{}
+		for _, opt := range opts {
+			opt.SetTmpfsOption(t)
+		}
 		m.tmpfs = true
+		m.tmpfsOpt = *t
 	}
+}
+
+type TmpfsOption interface {
+	SetTmpfsOption(*TmpfsInfo)
+}
+
+type tmpfsOptionFunc func(*TmpfsInfo)
+
+func (fn tmpfsOptionFunc) SetTmpfsOption(ti *TmpfsInfo) {
+	fn(ti)
+}
+
+func TmpfsSize(b int64) TmpfsOption {
+	return tmpfsOptionFunc(func(ti *TmpfsInfo) {
+		ti.Size = b
+	})
+}
+
+type TmpfsInfo struct {
+	Size int64
 }
 
 type RunOption interface {
@@ -495,6 +565,18 @@ func Args(a []string) RunOption {
 func AddExtraHost(host string, ip net.IP) RunOption {
 	return runOptionFunc(func(ei *ExecInfo) {
 		ei.State = ei.State.AddExtraHost(host, ip)
+	})
+}
+
+func AddUlimit(name UlimitName, soft int64, hard int64) RunOption {
+	return runOptionFunc(func(ei *ExecInfo) {
+		ei.State = ei.State.AddUlimit(name, soft, hard)
+	})
+}
+
+func WithCgroupParent(cp string) RunOption {
+	return runOptionFunc(func(ei *ExecInfo) {
+		ei.State = ei.State.WithCgroupParent(cp)
 	})
 }
 
@@ -593,6 +675,7 @@ type SecretInfo struct {
 	UID      int
 	GID      int
 	Optional bool
+	IsEnv    bool
 }
 
 var SecretOptional = secretOptionFunc(func(si *SecretInfo) {
@@ -602,6 +685,13 @@ var SecretOptional = secretOptionFunc(func(si *SecretInfo) {
 func SecretID(id string) SecretOption {
 	return secretOptionFunc(func(si *SecretInfo) {
 		si.ID = id
+	})
+}
+
+// SecretAsEnv defines if the secret should be added as an environment variable
+func SecretAsEnv(v bool) SecretOption {
+	return secretOptionFunc(func(si *SecretInfo) {
+		si.IsEnv = v
 	})
 }
 
@@ -666,4 +756,24 @@ const (
 const (
 	SecurityModeInsecure = pb.SecurityMode_INSECURE
 	SecurityModeSandbox  = pb.SecurityMode_SANDBOX
+)
+
+type UlimitName string
+
+const (
+	UlimitCore       UlimitName = "core"
+	UlimitCPU        UlimitName = "cpu"
+	UlimitData       UlimitName = "data"
+	UlimitFsize      UlimitName = "fsize"
+	UlimitLocks      UlimitName = "locks"
+	UlimitMemlock    UlimitName = "memlock"
+	UlimitMsgqueue   UlimitName = "msgqueue"
+	UlimitNice       UlimitName = "nice"
+	UlimitNofile     UlimitName = "nofile"
+	UlimitNproc      UlimitName = "nproc"
+	UlimitRss        UlimitName = "rss"
+	UlimitRtprio     UlimitName = "rtprio"
+	UlimitRttime     UlimitName = "rttime"
+	UlimitSigpending UlimitName = "sigpending"
+	UlimitStack      UlimitName = "stack"
 )

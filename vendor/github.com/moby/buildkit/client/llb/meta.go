@@ -9,21 +9,24 @@ import (
 	"github.com/containerd/containerd/platforms"
 	"github.com/google/shlex"
 	"github.com/moby/buildkit/solver/pb"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type contextKeyT string
 
 var (
-	keyArgs      = contextKeyT("llb.exec.args")
-	keyDir       = contextKeyT("llb.exec.dir")
-	keyEnv       = contextKeyT("llb.exec.env")
-	keyUser      = contextKeyT("llb.exec.user")
-	keyHostname  = contextKeyT("llb.exec.hostname")
-	keyExtraHost = contextKeyT("llb.exec.extrahost")
-	keyPlatform  = contextKeyT("llb.platform")
-	keyNetwork   = contextKeyT("llb.network")
-	keySecurity  = contextKeyT("llb.security")
+	keyArgs         = contextKeyT("llb.exec.args")
+	keyDir          = contextKeyT("llb.exec.dir")
+	keyEnv          = contextKeyT("llb.exec.env")
+	keyExtraHost    = contextKeyT("llb.exec.extrahost")
+	keyHostname     = contextKeyT("llb.exec.hostname")
+	keyUlimit       = contextKeyT("llb.exec.ulimit")
+	keyCgroupParent = contextKeyT("llb.exec.cgroup.parent")
+	keyUser         = contextKeyT("llb.exec.user")
+
+	keyPlatform = contextKeyT("llb.platform")
+	keyNetwork  = contextKeyT("llb.network")
+	keySecurity = contextKeyT("llb.security")
 )
 
 func AddEnvf(key, value string, v ...interface{}) StateOption {
@@ -182,20 +185,20 @@ func shlexf(str string, replace bool, v ...interface{}) StateOption {
 	}
 }
 
-func platform(p specs.Platform) StateOption {
+func platform(p ocispecs.Platform) StateOption {
 	return func(s State) State {
 		return s.WithValue(keyPlatform, platforms.Normalize(p))
 	}
 }
 
-func getPlatform(s State) func(context.Context, *Constraints) (*specs.Platform, error) {
-	return func(ctx context.Context, c *Constraints) (*specs.Platform, error) {
+func getPlatform(s State) func(context.Context, *Constraints) (*ocispecs.Platform, error) {
+	return func(ctx context.Context, c *Constraints) (*ocispecs.Platform, error) {
 		v, err := s.getValue(keyPlatform)(ctx, c)
 		if err != nil {
 			return nil, err
 		}
 		if v != nil {
-			p := v.(specs.Platform)
+			p := v.(ocispecs.Platform)
 			return &p, nil
 		}
 		return nil, nil
@@ -230,6 +233,54 @@ func getExtraHosts(s State) func(context.Context, *Constraints) ([]HostIP, error
 type HostIP struct {
 	Host string
 	IP   net.IP
+}
+
+func ulimit(name UlimitName, soft int64, hard int64) StateOption {
+	return func(s State) State {
+		return s.withValue(keyUlimit, func(ctx context.Context, c *Constraints) (interface{}, error) {
+			v, err := getUlimit(s)(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			return append(v, pb.Ulimit{
+				Name: string(name),
+				Soft: soft,
+				Hard: hard,
+			}), nil
+		})
+	}
+}
+
+func getUlimit(s State) func(context.Context, *Constraints) ([]pb.Ulimit, error) {
+	return func(ctx context.Context, c *Constraints) ([]pb.Ulimit, error) {
+		v, err := s.getValue(keyUlimit)(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			return v.([]pb.Ulimit), nil
+		}
+		return nil, nil
+	}
+}
+
+func cgroupParent(cp string) StateOption {
+	return func(s State) State {
+		return s.WithValue(keyCgroupParent, cp)
+	}
+}
+
+func getCgroupParent(s State) func(context.Context, *Constraints) (string, error) {
+	return func(ctx context.Context, c *Constraints) (string, error) {
+		v, err := s.getValue(keyCgroupParent)(ctx, c)
+		if err != nil {
+			return "", err
+		}
+		if v != nil {
+			return v.(string), nil
+		}
+		return "", nil
+	}
 }
 
 func Network(v pb.NetMode) StateOption {

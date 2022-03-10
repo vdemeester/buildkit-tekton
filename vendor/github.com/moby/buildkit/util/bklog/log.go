@@ -3,14 +3,29 @@ package bklog
 import (
 	"context"
 
+	"github.com/containerd/containerd/log"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/trace"
 )
+
+func init() {
+	// overwrites containerd/log
+	log.G = GetLogger
+	log.L = L
+}
 
 var (
 	G = GetLogger
 	L = logrus.NewEntry(logrus.StandardLogger())
 )
+
+var (
+	logWithTraceID = false
+)
+
+func EnableLogWithTraceID(b bool) {
+	logWithTraceID = b
+}
 
 type (
 	loggerKey struct{}
@@ -29,17 +44,19 @@ func GetLogger(ctx context.Context) (l *logrus.Entry) {
 
 	if logger != nil {
 		l = logger.(*logrus.Entry)
+	} else if logger := log.GetLogger(ctx); logger != nil {
+		l = logger
 	} else {
 		l = L
 	}
 
-	spanContext := trace.SpanFromContext(ctx).SpanContext()
-
-	if spanContext.IsValid() {
-		return l.WithFields(logrus.Fields{
-			"traceID": spanContext.TraceID(),
-			"spanID":  spanContext.SpanID(),
-		})
+	if logWithTraceID {
+		if spanContext := trace.SpanFromContext(ctx).SpanContext(); spanContext.IsValid() {
+			return l.WithFields(logrus.Fields{
+				"traceID": spanContext.TraceID(),
+				"spanID":  spanContext.SpanID(),
+			})
+		}
 	}
 
 	return l

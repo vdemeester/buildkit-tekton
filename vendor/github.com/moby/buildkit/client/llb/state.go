@@ -12,7 +12,7 @@ import (
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/apicaps"
 	digest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type StateOption func(State) State
@@ -27,6 +27,18 @@ type Vertex interface {
 	Marshal(context.Context, *Constraints) (digest.Digest, []byte, *pb.OpMetadata, []*SourceLocation, error)
 	Output() Output
 	Inputs() []Output
+}
+
+func NewConstraints(co ...ConstraintsOpt) *Constraints {
+	defaultPlatform := platforms.Normalize(platforms.DefaultSpec())
+	c := &Constraints{
+		Platform:      &defaultPlatform,
+		LocalUniqueID: identity.NewID(),
+	}
+	for _, o := range co {
+		o.SetConstraintsOption(c)
+	}
+	return c
 }
 
 func NewState(o Output) State {
@@ -48,7 +60,7 @@ type State struct {
 
 func (s State) ensurePlatform() State {
 	if o, ok := s.out.(interface {
-		Platform() *specs.Platform
+		Platform() *ocispecs.Platform
 	}); ok {
 		if p := o.Platform(); p != nil {
 			s = platform(*p)(s)
@@ -112,18 +124,12 @@ func (s State) SetMarshalDefaults(co ...ConstraintsOpt) State {
 }
 
 func (s State) Marshal(ctx context.Context, co ...ConstraintsOpt) (*Definition, error) {
+	c := NewConstraints(append(s.opts, co...)...)
 	def := &Definition{
-		Metadata: make(map[digest.Digest]pb.OpMetadata, 0),
+		Metadata:    make(map[digest.Digest]pb.OpMetadata, 0),
+		Constraints: c,
 	}
 
-	defaultPlatform := platforms.Normalize(platforms.DefaultSpec())
-	c := &Constraints{
-		Platform:      &defaultPlatform,
-		LocalUniqueID: identity.NewID(),
-	}
-	for _, o := range append(s.opts, co...) {
-		o.SetConstraintsOption(c)
-	}
 	if s.Output() == nil || s.Output().Vertex(ctx, c) == nil {
 		return def, nil
 	}
@@ -351,11 +357,11 @@ func (s State) GetHostname(ctx context.Context, co ...ConstraintsOpt) (string, e
 	return getHostname(s)(ctx, c)
 }
 
-func (s State) Platform(p specs.Platform) State {
+func (s State) Platform(p ocispecs.Platform) State {
 	return platform(p)(s)
 }
 
-func (s State) GetPlatform(ctx context.Context, co ...ConstraintsOpt) (*specs.Platform, error) {
+func (s State) GetPlatform(ctx context.Context, co ...ConstraintsOpt) (*ocispecs.Platform, error) {
 	c := &Constraints{}
 	for _, f := range co {
 		f.SetConstraintsOption(c)
@@ -397,13 +403,21 @@ func (s State) AddExtraHost(host string, ip net.IP) State {
 	return extraHost(host, ip)(s)
 }
 
+func (s State) AddUlimit(name UlimitName, soft int64, hard int64) State {
+	return ulimit(name, soft, hard)(s)
+}
+
+func (s State) WithCgroupParent(cp string) State {
+	return cgroupParent(cp)(s)
+}
+
 func (s State) isFileOpCopyInput() {}
 
 type output struct {
 	vertex   Vertex
 	getIndex func() (pb.OutputIndex, error)
 	err      error
-	platform *specs.Platform
+	platform *ocispecs.Platform
 }
 
 func (o *output) ToInput(ctx context.Context, c *Constraints) (*pb.Input, error) {
@@ -429,7 +443,7 @@ func (o *output) Vertex(context.Context, *Constraints) Vertex {
 	return o.vertex
 }
 
-func (o *output) Platform() *specs.Platform {
+func (o *output) Platform() *ocispecs.Platform {
 	return o.platform
 }
 
@@ -489,6 +503,10 @@ func mergeMetadata(m1, m2 pb.OpMetadata) pb.OpMetadata {
 			m1.Caps = make(map[apicaps.CapID]bool, len(m2.Caps))
 		}
 		m1.Caps[k] = true
+	}
+
+	if m2.ProgressGroup != nil {
+		m1.ProgressGroup = m2.ProgressGroup
 	}
 
 	return m1
@@ -560,7 +578,7 @@ func (cw *constraintsWrapper) applyConstraints(f func(c *Constraints)) {
 }
 
 type Constraints struct {
-	Platform          *specs.Platform
+	Platform          *ocispecs.Platform
 	WorkerConstraints []string
 	Metadata          pb.OpMetadata
 	LocalUniqueID     string
@@ -568,7 +586,7 @@ type Constraints struct {
 	SourceLocations   []*SourceLocation
 }
 
-func Platform(p specs.Platform) ConstraintsOpt {
+func Platform(p ocispecs.Platform) ConstraintsOpt {
 	return constraintsOptFunc(func(c *Constraints) {
 		c.Platform = &p
 	})
@@ -580,16 +598,22 @@ func LocalUniqueID(v string) ConstraintsOpt {
 	})
 }
 
+func ProgressGroup(id, name string, weak bool) ConstraintsOpt {
+	return constraintsOptFunc(func(c *Constraints) {
+		c.Metadata.ProgressGroup = &pb.ProgressGroup{Id: id, Name: name, Weak: weak}
+	})
+}
+
 var (
-	LinuxAmd64   = Platform(specs.Platform{OS: "linux", Architecture: "amd64"})
-	LinuxArmhf   = Platform(specs.Platform{OS: "linux", Architecture: "arm", Variant: "v7"})
+	LinuxAmd64   = Platform(ocispecs.Platform{OS: "linux", Architecture: "amd64"})
+	LinuxArmhf   = Platform(ocispecs.Platform{OS: "linux", Architecture: "arm", Variant: "v7"})
 	LinuxArm     = LinuxArmhf
-	LinuxArmel   = Platform(specs.Platform{OS: "linux", Architecture: "arm", Variant: "v6"})
-	LinuxArm64   = Platform(specs.Platform{OS: "linux", Architecture: "arm64"})
-	LinuxS390x   = Platform(specs.Platform{OS: "linux", Architecture: "s390x"})
-	LinuxPpc64le = Platform(specs.Platform{OS: "linux", Architecture: "ppc64le"})
-	Darwin       = Platform(specs.Platform{OS: "darwin", Architecture: "amd64"})
-	Windows      = Platform(specs.Platform{OS: "windows", Architecture: "amd64"})
+	LinuxArmel   = Platform(ocispecs.Platform{OS: "linux", Architecture: "arm", Variant: "v6"})
+	LinuxArm64   = Platform(ocispecs.Platform{OS: "linux", Architecture: "arm64"})
+	LinuxS390x   = Platform(ocispecs.Platform{OS: "linux", Architecture: "s390x"})
+	LinuxPpc64le = Platform(ocispecs.Platform{OS: "linux", Architecture: "ppc64le"})
+	Darwin       = Platform(ocispecs.Platform{OS: "darwin", Architecture: "amd64"})
+	Windows      = Platform(ocispecs.Platform{OS: "windows", Architecture: "amd64"})
 )
 
 func Require(filters ...string) ConstraintsOpt {

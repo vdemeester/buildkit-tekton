@@ -10,7 +10,7 @@ func Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "local",
 		Aliases: []string{},
-		Short:   "Local commands",
+		Short:   "Tekton \"local\" commands",
 		Annotations: map[string]string{
 			"commandType": "main",
 		},

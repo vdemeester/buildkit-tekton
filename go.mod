@@ -11,14 +11,16 @@ replace (
 )
 
 require (
-	github.com/docker/cli v20.10.12+incompatible
+	github.com/docker/cli v20.10.14+incompatible
 	github.com/docker/distribution v2.8.1+incompatible
 	github.com/google/go-cmp v0.5.7
 	github.com/moby/buildkit v0.10.0
+	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.4.0
 	github.com/tektoncd/pipeline v0.33.2
+	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	k8s.io/api v0.23.4
 	k8s.io/apimachinery v0.23.4
@@ -104,7 +106,6 @@ require (
 	github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/moby/sys/signal v0.7.0 // indirect
-	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
@@ -117,7 +118,6 @@ require (
 	github.com/prometheus/statsd_exporter v0.21.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tonistiigi/fsutil v0.0.0-20220115021204-b19f7f9cb274 // indirect
-	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
 	github.com/tonistiigi/vt100 v0.0.0-20210615222946-8066bb97264f // indirect
 	go.opencensus.io v0.23.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.29.0 // indirect

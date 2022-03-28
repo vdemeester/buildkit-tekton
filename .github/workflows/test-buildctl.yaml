@@ -1,11 +1,10 @@
-name: test
+name: test-buildctl
 
 on:
   push:
-    branches:
-      - master
-      - 'release/**'
+    branches: [ main, 'release/**' ]
   pull_request:
+    branches: [ main ]
 
 jobs:
 

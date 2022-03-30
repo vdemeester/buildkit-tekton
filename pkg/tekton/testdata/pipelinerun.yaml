@@ -1,4 +1,4 @@
-#syntax=quay.io/vdemeest/buildkit-tekton:test
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend:test
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:

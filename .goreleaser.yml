@@ -1,0 +1,41 @@
+before:
+  hooks:
+    # you may remove this if you don't use vgo
+    - go mod tidy
+builds:
+- main: ./cmd/tkn-local
+  env:
+  - CGO_ENABLED=0
+  flags:
+  - -trimpath
+  # ldflags:
+  # - "-s -w -X github.com/vdemeester/buildkit-tekton/cmd/local-run.Version={{.Version}}"
+  goos:
+  - windows
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+  - s390x
+  - 386
+  - mips64le
+  - ppc64le
+archives:
+- replacements:
+    darwin: Darwin
+    linux: Linux
+    windows: Windows
+    386: i386
+    amd64: x86_64
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+    - '^docs:'
+    - '^test:'

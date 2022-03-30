@@ -1,5 +1,5 @@
 VERSION         = latest
-IMAGE_REFERENCE = quay.io/vdemeest/buildkit-tekton
+IMAGE_REFERENCE = ghcr.io/vdemeester/buildkit-tekton/frontend
 RUNTIME         = docker
 
 

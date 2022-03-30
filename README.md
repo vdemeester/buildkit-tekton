@@ -13,7 +13,7 @@ This repository produces two *artifacts*:
 
 ### With Docker (v20.04+ with `DOCKER_BUILDKIT=1`)
 
-Add `#syntax=quay.io/vdemeest/buildkit-tekton:v0.2.0` as the first
+Add `#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.2.0` as the first
 line of you tekton yaml:
 
 ```bash
@@ -23,7 +23,7 @@ docker build -f taskrun.yaml .
 ### With `buildctl`
 
 ```bash
-buildctl build --frontend=gateway.v0 --opt source=quay.io/vdemeest/buildkit-tekton:v0.2.0 --local context=. --opt-filename=pipelienrun.yaml --local dockerfile=.
+buildctl build --frontend=gateway.v0 --opt source=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.2.0 --local context=. --opt-filename=pipelienrun.yaml --local dockerfile=.
 ```
 
 ### Options
@@ -41,8 +41,8 @@ $ docker build -t foo -f examples/0-taskrun-simple/run.yaml .
  => => transferring dockerfile: 887B                                              0.0s
  => [internal] load .dockerignore                                                 0.0s
  => => transferring context: 34B                                                  0.0s
- => resolve image config for quay.io/vdemeest/buildkit-tekton:latest              0.0s
- => CACHED docker-image://quay.io/vdemeest/buildkit-tekton:latest                 0.0s
+ => resolve image config for ghcr.io/vdemeester/buildkit-tekton/frontend:latest   0.0s
+ => CACHED docker-image://ghcr.io/vdemeester/buildkit-tekton/frontend:latest      0.0s
  => [tekton] load resource(s) from run.yaml                                       0.0s
  => => transferring dockerfile: 131B                                              0.0s
  => [tekton] load yaml files from context                                         0.0s

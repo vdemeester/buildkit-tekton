@@ -35,7 +35,7 @@ jobs:
     - id: meta
       uses: docker/metadata-action@v3
       with:
-        images: ghcr.io/${{ github.repository }}/buildkit-tekton
+        images: ghcr.io/${{ github.repository }}/frontend
         flavor: |
           latest=true
     - uses: docker/build-push-action@v2

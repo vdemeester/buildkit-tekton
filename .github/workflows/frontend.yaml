@@ -1,4 +1,4 @@
-name: test-buildctl
+name: frontend
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
 
 jobs:
 
-  test-integration-buildctl:
-    runs-on: ubuntu-20.04
+  test-integration:
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v2
@@ -19,7 +19,23 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y moreutils make
-    - name: "Run the integration test"
+    - name: "Run the integration test (docker)"
+      run: ./hack/test.sh
+    - name: "Show the local images"
+      run: docker images --no-trunc
+
+  test-integration-buildctl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+    - name: "Install test dependencies"
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y moreutils make
+    - name: "Run the integration test (buildctl)"
       run: |
         set -x
         mkdir ${HOME}/bin

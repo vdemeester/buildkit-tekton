@@ -23,7 +23,8 @@ builds:
   - mips64le
   - ppc64le
 archives:
-- replacements:
+- name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}"
+  replacements:
     darwin: Darwin
     linux: Linux
     windows: Windows

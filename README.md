@@ -13,7 +13,7 @@ This repository produces two *artifacts*:
 
 ### With Docker (v20.04+ with `DOCKER_BUILDKIT=1`)
 
-Add `#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.2.0` as the first
+Add `#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.3.0` as the first
 line of you tekton yaml:
 
 ```bash
@@ -23,7 +23,7 @@ docker build -f taskrun.yaml .
 ### With `buildctl`
 
 ```bash
-buildctl build --frontend=gateway.v0 --opt source=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.2.0 --local context=. --opt-filename=pipelienrun.yaml --local dockerfile=.
+buildctl build --frontend=gateway.v0 --opt source=ghcr.io/vdemeester/buildkit-tekton/frontend:v0.3.0 --local context=. --opt-filename=pipelienrun.yaml --local dockerfile=.
 ```
 
 ### Options

@@ -1,0 +1,25 @@
+name: dagger (test)
+
+on:
+  push:
+    branches: [ main, 'release/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+    - name: install dagger
+      uses: dagger/dagger-for-github@v2
+      with:
+        install-only: true
+    - name: image
+      run: dagger do image
+    - name: "tkn-local"
+      run: dagger do tkn-local
+    - name: test
+      run: dagger do test

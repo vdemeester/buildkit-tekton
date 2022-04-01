@@ -18,8 +18,8 @@ jobs:
       with:
         install-only: true
     - name: image
-      run: dagger do image
+      run: dagger do --log-format=plain image
     - name: "tkn-local"
-      run: dagger do tkn-local
+      run: dagger do --log-format=plain tkn-local
     - name: test
-      run: dagger do test
+      run: dagger do --log-format=plain test

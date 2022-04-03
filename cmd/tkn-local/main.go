@@ -20,6 +20,7 @@ func Command() *cobra.Command {
 		pruneCommand(),
 		runCommand(),
 	)
+
 	return cmd
 }
 

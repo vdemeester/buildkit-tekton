@@ -21,11 +21,6 @@ dagger.#Plan & {
 	}
 
 	actions: {
-		_goimage: go.#Image & {
-			version: "1.18.0" // 1.17.8 # FIXME(vdemeester) do a matrix/param here
-			packages: {git: {}}
-		}
-
 		// Cache
 		_goBuildCache: core.#CacheDir & {
 			id: "go-build-cache"
@@ -46,7 +41,6 @@ dagger.#Plan & {
 			source:    client.filesystem."./".read.contents
 			package:   "./cmd/tkn-local"
 			container: go.#Container & {
-				input:  _goimage.output
 				mounts: _goBuildCacheMount & _goModCacheMount
 			}
 		}
@@ -54,7 +48,6 @@ dagger.#Plan & {
 			source:    client.filesystem."./".read.contents
 			package:   "./cmd/buildkit-tekton"
 			container: go.#Container & {
-				input:  _goimage.output
 				mounts: _goBuildCacheMount & _goModCacheMount
 			}
 		}

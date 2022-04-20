@@ -1,11 +1,13 @@
 package tekton
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
 )
 
@@ -14,18 +16,28 @@ type objects struct {
 	taskruns     []*v1beta1.TaskRun
 	pipelines    []*v1beta1.Pipeline
 	pipelineruns []*v1beta1.PipelineRun
+	secrets      []*corev1.Secret
+	configs      []*corev1.ConfigMap
 }
 
 type TaskRun struct {
-	main  *v1beta1.TaskRun
-	tasks map[string]*v1beta1.Task
+	main    *v1beta1.TaskRun
+	tasks   map[string]*v1beta1.Task
+	secrets []*corev1.Secret
+	configs []*corev1.ConfigMap
 }
 
 type PipelineRun struct {
 	main      *v1beta1.PipelineRun
 	tasks     map[string]*v1beta1.Task
 	pipelines map[string]*v1beta1.Pipeline
+	secrets   []*corev1.Secret
+	configs   []*corev1.ConfigMap
 }
+
+var (
+	reg = regexp.MustCompile(`(?m)^\s*#([^#].*?)$`)
+)
 
 func readResources(main string, additionals []string) (interface{}, error) {
 	s := k8scheme.Scheme
@@ -38,9 +50,22 @@ func readResources(main string, additionals []string) (interface{}, error) {
 	}
 	switch {
 	case len(objs.taskruns) == 1 && len(objs.pipelineruns) == 0:
-		return populateTaskRun(objs.taskruns[0], additionals)
+		r := TaskRun{
+			main:    objs.taskruns[0],
+			secrets: objs.secrets,
+			configs: objs.configs,
+			tasks:   map[string]*v1beta1.Task{},
+		}
+		return populateTaskRun(r, additionals)
 	case len(objs.taskruns) == 0 && len(objs.pipelineruns) == 1:
-		return populatePipelineRun(objs.pipelineruns[0], additionals)
+		r := PipelineRun{
+			main:      objs.pipelineruns[0],
+			secrets:   objs.secrets,
+			configs:   objs.configs,
+			tasks:     map[string]*v1beta1.Task{},
+			pipelines: map[string]*v1beta1.Pipeline{},
+		}
+		return populatePipelineRun(r, additionals)
 	case len(objs.taskruns) == 0 && len(objs.pipelineruns) == 0:
 		return nil, errors.New("No taskrun or pipelinern to run")
 	case len(objs.taskruns) == 1 && len(objs.pipelineruns) == 1:
@@ -52,13 +77,9 @@ func readResources(main string, additionals []string) (interface{}, error) {
 	}
 }
 
-func populateTaskRun(tr *v1beta1.TaskRun, additionals []string) (TaskRun, error) {
-	r := TaskRun{
-		main:  tr,
-		tasks: map[string]*v1beta1.Task{},
-	}
+func populateTaskRun(r TaskRun, additionals []string) (TaskRun, error) {
 	for _, data := range additionals {
-		for _, doc := range strings.Split(strings.Trim(data, "-"), "---") {
+		for _, doc := range strings.Split(strings.Trim(reg.ReplaceAllString(data, ""), "-"), "---") {
 			obj, err := parseTektonYAML(doc)
 			if err != nil {
 				return r, errors.Wrapf(err, "failed to unmarshal %v", doc)
@@ -74,14 +95,9 @@ func populateTaskRun(tr *v1beta1.TaskRun, additionals []string) (TaskRun, error)
 	return r, nil
 }
 
-func populatePipelineRun(pr *v1beta1.PipelineRun, additionals []string) (PipelineRun, error) {
-	r := PipelineRun{
-		main:      pr,
-		tasks:     map[string]*v1beta1.Task{},
-		pipelines: map[string]*v1beta1.Pipeline{},
-	}
+func populatePipelineRun(r PipelineRun, additionals []string) (PipelineRun, error) {
 	for _, data := range additionals {
-		for _, doc := range strings.Split(strings.Trim(data, "-"), "---") {
+		for _, doc := range strings.Split(strings.Trim(reg.ReplaceAllString(data, ""), "-"), "---") {
 			obj, err := parseTektonYAML(doc)
 			if err != nil {
 				return r, errors.Wrapf(err, "failed to unmarshal %v", doc)
@@ -105,8 +121,11 @@ func parseTektonYAMLs(s string) (*objects, error) {
 		taskruns:     []*v1beta1.TaskRun{},
 		pipelines:    []*v1beta1.Pipeline{},
 		pipelineruns: []*v1beta1.PipelineRun{},
+		secrets:      []*corev1.Secret{},
+		configs:      []*corev1.ConfigMap{},
 	}
-	for _, doc := range strings.Split(strings.Trim(s, "-"), "---") {
+
+	for _, doc := range strings.Split(strings.Trim(reg.ReplaceAllString(s, ""), "-"), "---") {
 		obj, err := parseTektonYAML(doc)
 		if err != nil {
 			return r, errors.Wrapf(err, "failed to unmarshal %v", doc)
@@ -120,6 +139,10 @@ func parseTektonYAMLs(s string) (*objects, error) {
 			r.pipelines = append(r.pipelines, o)
 		case *v1beta1.PipelineRun:
 			r.pipelineruns = append(r.pipelineruns, o)
+		case *corev1.Secret:
+			r.secrets = append(r.secrets, o)
+		case *corev1.ConfigMap:
+			r.configs = append(r.configs, o)
 		}
 	}
 	return r, nil

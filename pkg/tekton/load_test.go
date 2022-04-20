@@ -19,7 +19,15 @@ func TestReadResources(t *testing.T) {
 	tt := []struct {
 		main        string
 		additionals []string
-	}{}
+	}{{
+		main:        "another-pipelinerun.yaml",
+		additionals: []string{"git-clone.yaml"},
+	}, {
+		main:        "pipelinerun-with-parallel-tasks-using-pvc.yaml",
+		additionals: []string{"serviceaccount.yaml"},
+	}, {
+		main: "workspaces.yaml",
+	}}
 	for _, tc := range tt {
 		tc := tc
 		name := fmt.Sprintf("%s-%s", tc.main, strings.Join(tc.additionals, "_"))
@@ -29,11 +37,22 @@ func TestReadResources(t *testing.T) {
 
 func testReadResources(main string, additionals []string) func(*testing.T) {
 	return func(t *testing.T) {
-		_, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s", main))
+		m, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s", main))
 		if err != nil {
 			t.Fatalf("ReadFile() = %v", err)
 		}
-
+		a := []string{}
+		for _, ad := range additionals {
+			d, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s", ad))
+			if err != nil {
+				t.Fatalf("ReadFile() = %v", err)
+			}
+			a = append(a, string(d))
+		}
+		_, err = readResources(string(m), a)
+		if err != nil {
+			t.Fatalf("readResources() = %v", err)
+		}
 	}
 }
 

@@ -35,7 +35,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		if !ok {
 			return llb.State{}, errors.Errorf("PipelineRef %s not found in context", pr.Spec.PipelineRef.Name)
 		}
-		ps.SetDefaults(ctx)
+		p.SetDefaults(ctx)
 		ps = &p.Spec
 	}
 

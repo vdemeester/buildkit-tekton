@@ -9,6 +9,7 @@ import (
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/reconciler/pipeline/dag"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/resources"
 	"github.com/vdemeester/buildkit-tekton/pkg/tekton/files"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -94,37 +95,55 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 			}
 		}
 	}
+	d, err := dag.Build(v1beta1.PipelineTaskList(spec.Tasks), v1beta1.PipelineTaskList(spec.Tasks).Deps())
+	if err != nil {
+		return llb.State{}, err
+	}
+	roots, err := dag.GetSchedulable(d)
+	if err != nil {
+		return llb.State{}, err
+	}
+	fmt.Println("roots", roots)
 	tasks := map[string][]llb.State{}
+	for _, root := range roots.List() {
+		n := d.Nodes[root]
+		task := n.Task.(v1beta1.PipelineTask)
+		fmt.Println("n", n)
+		fmt.Println("n.Task", n.Task)
+		fmt.Println("n.Next", n.Next)
+		var taskspec *v1beta1.TaskSpec
+		if task.TaskSpec != nil {
+			taskspec = &task.TaskSpec.TaskSpec
+		}
+		name, rts, err := resolveTaskNameAndSpec(ctx, taskspec, task.TaskRef, r.tasks, func(ctx context.Context, ref v1beta1.TaskRef) (*v1beta1.Task, error) {
+			return resolveTaskInBundle(ctx, c, ref)
+		})
+		if err != nil {
+			return llb.State{}, err
+		}
+		fmt.Println("name", name)
+		fmt.Println("rts", rts)
+	}
+	fmt.Println("yo")
+
 	for _, t := range spec.Tasks {
-		var ts v1beta1.TaskSpec
-		var name string
-		if t.TaskRef != nil {
-			name = t.TaskRef.Name
-			if t.TaskRef.Bundle != "" {
-				resolvedTask, err := resolveTaskInBundle(ctx, c, *t.TaskRef)
-				if err != nil {
-					return llb.State{}, err
-				}
-				ts = resolvedTask.Spec
-			} else {
-				task, ok := r.tasks[t.TaskRef.Name]
-				if !ok {
-					return llb.State{}, errors.Errorf("Taskref %s not found in context", t.TaskRef.Name)
-				}
-				task.SetDefaults(ctx)
-				ts = task.Spec
-			}
-		} else if t.TaskSpec != nil {
-			name = "embedded"
-			ts = t.TaskSpec.TaskSpec
+		var taskspec *v1beta1.TaskSpec
+		if t.TaskSpec != nil {
+			taskspec = &t.TaskSpec.TaskSpec
+		}
+		name, rts, err := resolveTaskNameAndSpec(ctx, taskspec, t.TaskRef, r.tasks, func(ctx context.Context, ref v1beta1.TaskRef) (*v1beta1.Task, error) {
+			return resolveTaskInBundle(ctx, c, ref)
+		})
+		if err != nil {
+			return llb.State{}, err
 		}
 
-		ts, err = applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
+		ts, err := applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
 			Spec: v1beta1.TaskRunSpec{
 				Params:   t.Params,
-				TaskSpec: &ts,
+				TaskSpec: rts,
 			},
-		}, &ts, name)
+		}, rts, name)
 		if err != nil {
 			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", t.Name)
 		}

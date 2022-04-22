@@ -39,26 +39,11 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 		return llb.State{}, err
 	}
 
-	var ts *v1beta1.TaskSpec
-	var name string
-	if tr.Spec.TaskSpec != nil {
-		ts = tr.Spec.TaskSpec
-		name = "embedded"
-	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Bundle != "" {
-		resolvedTask, err := resolveTaskInBundle(ctx, c, *tr.Spec.TaskRef)
-		if err != nil {
-			return llb.State{}, err
-		}
-		ts = &resolvedTask.Spec
-		name = tr.Spec.TaskRef.Name
-	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Name != "" {
-		t, ok := r.tasks[tr.Spec.TaskRef.Name]
-		if !ok {
-			return llb.State{}, errors.Errorf("Taskref %s not found in context", tr.Spec.TaskRef.Name)
-		}
-		t.SetDefaults(ctx)
-		ts = &t.Spec
-		name = tr.Spec.TaskRef.Name
+	name, ts, err := resolveTaskNameAndSpec(ctx, tr.Spec.TaskSpec, tr.Spec.TaskRef, r.tasks, func(ctx context.Context, ref v1beta1.TaskRef) (*v1beta1.Task, error) {
+		return resolveTaskInBundle(ctx, c, ref)
+	})
+	if err != nil {
+		return llb.State{}, err
 	}
 
 	// Interpolation

@@ -25,14 +25,17 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 	}
 
 	var ps *v1beta1.PipelineSpec
+	var name string
 	if pr.Spec.PipelineSpec != nil {
 		ps = pr.Spec.PipelineSpec
+		name = "embedded"
 	} else if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Bundle != "" {
 		resolvedPipeline, err := resolvePipelineInBundle(ctx, c, *pr.Spec.PipelineRef)
 		if err != nil {
 			return llb.State{}, err
 		}
 		ps = &resolvedPipeline.Spec
+		name = pr.Spec.PipelineRef.Name
 	} else if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Name != "" {
 		p, ok := r.pipelines[pr.Spec.PipelineRef.Name]
 		if !ok {
@@ -40,10 +43,11 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		}
 		p.SetDefaults(ctx)
 		ps = &p.Spec
+		name = pr.Spec.PipelineRef.Name
 	}
 
 	// Interpolation
-	spec, err := applyPipelineRunSubstitution(ctx, pr, ps)
+	spec, err := applyPipelineRunSubstitution(ctx, pr, ps, name)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
 	}
@@ -93,7 +97,9 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 	tasks := map[string][]llb.State{}
 	for _, t := range spec.Tasks {
 		var ts v1beta1.TaskSpec
+		var name string
 		if t.TaskRef != nil {
+			name = t.TaskRef.Name
 			if t.TaskRef.Bundle != "" {
 				resolvedTask, err := resolveTaskInBundle(ctx, c, *t.TaskRef)
 				if err != nil {
@@ -109,6 +115,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 				ts = task.Spec
 			}
 		} else if t.TaskSpec != nil {
+			name = "embedded"
 			ts = t.TaskSpec.TaskSpec
 		}
 
@@ -117,7 +124,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 				Params:   t.Params,
 				TaskSpec: &ts,
 			},
-		}, &ts)
+		}, &ts, name)
 		if err != nil {
 			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", t.Name)
 		}
@@ -159,9 +166,9 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 	return ft.File(fa, llb.WithCustomName("[tekton] buildking image from result (fake)"), llb.IgnoreCache), nil
 }
 
-func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun, ps *v1beta1.PipelineSpec) (v1beta1.PipelineSpec, error) {
+func applyPipelineRunSubstitution(ctx context.Context, pr *v1beta1.PipelineRun, ps *v1beta1.PipelineSpec, pipelineName string) (v1beta1.PipelineSpec, error) {
 	ps = resources.ApplyParameters(ps, pr)
-	ps = resources.ApplyContexts(ps, "embedded", pr) // FIXME(vdemeester) handle this "embedded" better
+	ps = resources.ApplyContexts(ps, pipelineName, pr)
 	ps = resources.ApplyWorkspaces(ps, pr)
 
 	if err := ps.Validate(ctx); err != nil {

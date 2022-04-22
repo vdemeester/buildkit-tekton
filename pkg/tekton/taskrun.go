@@ -40,14 +40,17 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 	}
 
 	var ts *v1beta1.TaskSpec
+	var name string
 	if tr.Spec.TaskSpec != nil {
 		ts = tr.Spec.TaskSpec
+		name = "embedded"
 	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Bundle != "" {
 		resolvedTask, err := resolveTaskInBundle(ctx, c, *tr.Spec.TaskRef)
 		if err != nil {
 			return llb.State{}, err
 		}
 		ts = &resolvedTask.Spec
+		name = tr.Spec.TaskRef.Name
 	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Name != "" {
 		t, ok := r.tasks[tr.Spec.TaskRef.Name]
 		if !ok {
@@ -55,10 +58,11 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 		}
 		t.SetDefaults(ctx)
 		ts = &t.Spec
+		name = tr.Spec.TaskRef.Name
 	}
 
 	// Interpolation
-	spec, err := applyTaskRunSubstitution(ctx, tr, ts)
+	spec, err := applyTaskRunSubstitution(ctx, tr, ts, name)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "variable interpolation failed")
 	}
@@ -85,7 +89,7 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 	return stepStates[len(stepStates)-1], nil
 }
 
-func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec) (v1beta1.TaskSpec, error) {
+func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec, taskName string) (v1beta1.TaskSpec, error) {
 	var defaults []v1beta1.ParamSpec
 	if len(ts.Params) > 0 {
 		defaults = append(defaults, ts.Params...)
@@ -94,7 +98,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1be
 	ts = resources.ApplyParameters(ts, tr, defaults...)
 
 	// Apply context substitution from the taskrun
-	ts = resources.ApplyContexts(ts, "embedded", tr) // FIXME(vdemeester) handle task name here (in case of TaskRef)
+	ts = resources.ApplyContexts(ts, taskName, tr)
 
 	// TODO(vdemeester) support PipelineResource ?
 	// Apply bound resource substitution from the taskrun.

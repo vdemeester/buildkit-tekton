@@ -10,8 +10,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/resources"
+	"github.com/vdemeester/buildkit-tekton/pkg/tekton/files"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+type pipelineMountOptionFn func(string) mountOptionFn
 
 // PipelineRunToLLB converts a PipelineRun into a BuildKit LLB State.
 func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.State, error) {
@@ -46,9 +49,46 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 	}
 
 	// Execution
-	pipelineWorkspaces := map[string]llb.MountOption{}
-	for _, w := range spec.Workspaces {
-		pipelineWorkspaces[w.Name] = llb.AsPersistentCacheDir(pr.Name+"/"+w.Name, llb.CacheMountShared)
+	pipelineWorkspaces := map[string]pipelineMountOptionFn{}
+	for _, w := range pr.Spec.Workspaces {
+		switch {
+		case w.ConfigMap != nil:
+			configmap, ok := r.configs[w.ConfigMap.Name]
+			if !ok {
+				return llb.State{}, errors.Errorf("Configmap %s not found in context", w.ConfigMap.Name)
+			}
+			configmapState, err := files.ConfigMap(configmap, w.ConfigMap)
+			if err != nil {
+				return llb.State{}, err
+			}
+			pipelineWorkspaces[w.Name] = func(name string) mountOptionFn {
+				return func(_ llb.State) llb.RunOption {
+					return llb.AddMount(name, configmapState, llb.SourcePath("/"), llb.Readonly)
+				}
+			}
+		case w.Secret != nil:
+			secret, ok := r.secrets[w.Secret.SecretName]
+			if !ok {
+				return llb.State{}, errors.Errorf("secret %s not found in context", w.Secret.SecretName)
+			}
+			secretState, err := files.Secret(secret, w.Secret)
+			if err != nil {
+				return llb.State{}, err
+			}
+			pipelineWorkspaces[w.Name] = func(name string) mountOptionFn {
+				return func(_ llb.State) llb.RunOption {
+					return llb.AddMount(name, secretState, llb.SourcePath("/"), llb.Readonly)
+				}
+			}
+		case w.EmptyDir != nil ||
+			w.VolumeClaimTemplate != nil ||
+			w.PersistentVolumeClaim != nil:
+			pipelineWorkspaces[w.Name] = func(name string) mountOptionFn {
+				return func(state llb.State) llb.RunOption {
+					return llb.AddMount(name, state, llb.AsPersistentCacheDir(pr.Name+"/"+w.Name, llb.CacheMountShared))
+				}
+			}
+		}
 	}
 	tasks := map[string][]llb.State{}
 	for _, t := range spec.Tasks {
@@ -82,9 +122,10 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", t.Name)
 		}
 
-		taskWorkspaces := map[string]llb.MountOption{}
+		taskWorkspaces := []mountOptionFn{}
 		for _, w := range t.Workspaces {
-			taskWorkspaces["/workspace/"+w.Name] = pipelineWorkspaces[w.Workspace]
+			fn := pipelineWorkspaces[w.Workspace]
+			taskWorkspaces = append(taskWorkspaces, fn("/workspace/"+w.Name))
 		}
 		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces)
 		if err != nil {

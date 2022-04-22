@@ -23,16 +23,16 @@ type objects struct {
 type TaskRun struct {
 	main    *v1beta1.TaskRun
 	tasks   map[string]*v1beta1.Task
-	secrets []*corev1.Secret
-	configs []*corev1.ConfigMap
+	secrets map[string]*corev1.Secret
+	configs map[string]*corev1.ConfigMap
 }
 
 type PipelineRun struct {
 	main      *v1beta1.PipelineRun
 	tasks     map[string]*v1beta1.Task
 	pipelines map[string]*v1beta1.Pipeline
-	secrets   []*corev1.Secret
-	configs   []*corev1.ConfigMap
+	secrets   map[string]*corev1.Secret
+	configs   map[string]*corev1.ConfigMap
 }
 
 var (
@@ -52,16 +52,16 @@ func readResources(main string, additionals []string) (interface{}, error) {
 	case len(objs.taskruns) == 1 && len(objs.pipelineruns) == 0:
 		r := TaskRun{
 			main:    objs.taskruns[0],
-			secrets: objs.secrets,
-			configs: objs.configs,
+			secrets: secretsToMap(objs.secrets),
+			configs: configsToMap(objs.configs),
 			tasks:   map[string]*v1beta1.Task{},
 		}
 		return populateTaskRun(r, additionals)
 	case len(objs.taskruns) == 0 && len(objs.pipelineruns) == 1:
 		r := PipelineRun{
 			main:      objs.pipelineruns[0],
-			secrets:   objs.secrets,
-			configs:   objs.configs,
+			secrets:   secretsToMap(objs.secrets),
+			configs:   configsToMap(objs.configs),
 			tasks:     map[string]*v1beta1.Task{},
 			pipelines: map[string]*v1beta1.Pipeline{},
 		}
@@ -155,4 +155,20 @@ func parseTektonYAML(s string) (interface{}, error) {
 		return nil, err
 	}
 	return obj, nil
+}
+
+func secretsToMap(secrets []*corev1.Secret) map[string]*corev1.Secret {
+	m := map[string]*corev1.Secret{}
+	for _, s := range secrets {
+		m[s.Name] = s
+	}
+	return m
+}
+
+func configsToMap(configs []*corev1.ConfigMap) map[string]*corev1.ConfigMap {
+	m := map[string]*corev1.ConfigMap{}
+	for _, c := range configs {
+		m[c.Name] = c
+	}
+	return m
 }

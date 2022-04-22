@@ -112,7 +112,6 @@ func run(opts *runOption) error {
 			"context":    dir,
 			"dockerfile": dir,
 		},
-		// FrontAttrs is handled after
 		Session: attachable,
 		// CacheExports: c.cfg.CacheExports,
 		// CacheImports: c.cfg.CacheImports,

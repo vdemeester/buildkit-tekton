@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/docker/distribution/reference"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
-	"github.com/tektoncd/pipeline/pkg/names"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
+	"github.com/vdemeester/buildkit-tekton/pkg/tekton/files"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -26,7 +25,7 @@ type pstep struct {
 	image      string // might be ref
 	results    []mountOptionFn
 	runOptions []llb.RunOption
-	workspaces map[string]llb.MountOption
+	workspaces []mountOptionFn
 }
 
 type mountOptionFn func(llb.State) llb.RunOption
@@ -65,9 +64,13 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 	}
 
 	// Execution
-	workspaces := map[string]llb.MountOption{}
+	workspaces := []mountOptionFn{}
 	for _, w := range tr.Spec.Workspaces {
-		workspaces[w.Name] = llb.AsPersistentCacheDir(tr.Name+"/"+w.Name, llb.CacheMountShared)
+		workspaces = append(workspaces,
+			func(state llb.State) llb.RunOption {
+				return llb.AddMount(w.Name, state, llb.AsPersistentCacheDir(tr.Name+"/"+w.Name, llb.CacheMountShared))
+			},
+		)
 	}
 	steps, err := taskSpecToPSteps(ctx, c, spec, tr.Name, workspaces)
 	if err != nil {
@@ -117,13 +120,9 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1be
 	return *ts, nil
 }
 
-func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, name string, workspaces map[string]llb.MountOption) ([]pstep, error) {
+func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, name string, workspaces []mountOptionFn) ([]pstep, error) {
 	steps := make([]pstep, len(t.Steps))
 	cacheDirName := name + "/results"
-	taskWorkspaces := map[string]llb.MountOption{}
-	for _, w := range t.Workspaces {
-		taskWorkspaces["/workspace/"+w.Name] = workspaces[w.Name]
-	}
 	mergedSteps, err := v1beta1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
 	if err != nil {
 		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
@@ -138,25 +137,10 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 			llb.WithCustomName("[tekton] " + name + "/" + step.Name),
 		}
 		if step.Script != "" {
-			// Check for a shebang, and add a default if it's not set.
-			// The shebang must be the first non-empty line.
-			cleaned := strings.TrimSpace(step.Script)
-			hasShebang := strings.HasPrefix(cleaned, "#!")
-
-			script := step.Script
-			if !hasShebang {
-				script = defaultScriptPreamble + step.Script
-			}
-			filename := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("script-%d", i))
+			filename, scriptSt := files.Script(name+"/"+step.Name, fmt.Sprintf("script-%d", i), step.Script)
 			scriptFile := filepath.Join(scriptsDir, filename)
-			sourcePath := "/"
-			data := script
-			scriptSt := llb.Scratch().Dir("/").File(
-				llb.Mkfile(filename, 0755, []byte(data)),
-				llb.WithCustomName("[tekton] "+name+"/"+step.Name+": preparing script"),
-			)
 			runOptions = append(runOptions,
-				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath(sourcePath), llb.Readonly),
+				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath("/"), llb.Readonly),
 				llb.Args([]string{scriptFile}),
 			)
 		} else {
@@ -216,10 +200,8 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 				llb.AddMount(targetMount, stepStates[i-1], llb.SourcePath("/"), llb.Readonly),
 			)
 		}
-		for workspacePath, workspaceOptions := range step.workspaces {
-			mounts = append(mounts,
-				llb.AddMount(workspacePath, stepStates[i], workspaceOptions),
-			)
+		for _, wf := range step.workspaces {
+			mounts = append(mounts, wf(stepStates[i]))
 		}
 		runOptions = append(runOptions, mounts...)
 		runOptions = append(runOptions, additionnalMounts...)

@@ -3,6 +3,7 @@ package tekton
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/docker/distribution/reference"
@@ -66,8 +67,7 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 		return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to builtkit llb")
 	}
 
-	resultState := llb.Scratch()
-	stepStates, err := pstepToState(c, steps, resultState, []llb.RunOption{})
+	stepStates, err := pstepToState(c, steps, []llb.RunOption{})
 	if err != nil {
 		return llb.State{}, err
 	}
@@ -173,29 +173,33 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, 
 	return steps, nil
 }
 
-func pstepToState(c client.Client, steps []pstep, resultState llb.State, additionnalMounts []llb.RunOption) ([]llb.State, error) {
+func pstepToState(c client.Client, steps []pstep, additionnalMounts []llb.RunOption) ([]llb.State, error) {
 	stepStates := make([]llb.State, len(steps))
 	for i, step := range steps {
 		runOptions := step.runOptions
-		mounts := make([]llb.RunOption, len(step.results))
-		for i, r := range step.results {
-			mounts[i] = r(resultState)
-		}
+		mounts := []llb.RunOption{}
+		// mounts := make([]llb.RunOption, len(step.results))
+		// for i, r := range step.results {
+		// 	mounts[i] = r(resultState)
+		// }
 		// If not the first step, we need to create the chain to execute things in sequence
+		input := llb.Image(step.image, llb.WithMetaResolver(c)).
+			File(llb.Mkdir("/tekton/results", os.FileMode(int(0777)), llb.WithParents(true)))
 		if i > 0 {
 			// TODO decide what to mount exactly
-			targetMount := fmt.Sprintf("/previous/%d", i-1)
-			mounts = append(mounts,
-				llb.AddMount(targetMount, stepStates[i-1], llb.SourcePath("/"), llb.Readonly),
-			)
+			// targetMount := fmt.Sprintf("/previous/%d", i-1)
+			// mounts = append(mounts,
+			// 	llb.AddMount(targetMount, stepStates[i-1], llb.SourcePath("/"), llb.Readonly),
+			// )
+			results := llb.Copy(stepStates[i-1], "/tekton/results", "/tekton/results", &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true, CopyDirContentsOnly: true})
+			input = input.File(results, llb.IgnoreCache)
 		}
 		for _, wf := range step.workspaces {
 			mounts = append(mounts, wf(stepStates[i]))
 		}
 		runOptions = append(runOptions, mounts...)
 		runOptions = append(runOptions, additionnalMounts...)
-		state := llb.
-			Image(step.image, llb.WithMetaResolver(c)).
+		state := input.
 			Run(runOptions...).
 			Root()
 		stepStates[i] = state

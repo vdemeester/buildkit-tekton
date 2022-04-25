@@ -121,8 +121,99 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		if err != nil {
 			return llb.State{}, err
 		}
+
 		fmt.Println("name", name)
 		fmt.Println("rts", rts)
+
+		ts, err := applyTaskRunSubstitution(ctx, &v1beta1.TaskRun{
+			Spec: v1beta1.TaskRunSpec{
+				Params:   task.Params,
+				TaskSpec: rts,
+			},
+		}, rts, name)
+		if err != nil {
+			return llb.State{}, errors.Wrapf(err, "variable interpolation failed for %s", task.Name)
+		}
+
+		taskWorkspaces := []mountOptionFn{}
+		for _, w := range task.Workspaces {
+			fn := pipelineWorkspaces[w.Workspace]
+			taskWorkspaces = append(taskWorkspaces, fn("/workspace/"+w.Name))
+		}
+		steps, err := taskSpecToPSteps(ctx, c, ts, task.Name, taskWorkspaces)
+		if err != nil {
+			return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to llb")
+		}
+		mounts := []llb.RunOption{}
+		stepStates, err := pstepToState(c, steps, mounts)
+		if err != nil {
+			return llb.State{}, err
+		}
+
+		ft := llb.Scratch()
+		fa := llb.Mkdir("/tekton/results", os.FileMode(int(0777)), llb.WithParents(true))
+		state := stepStates[len(stepStates)-1]
+		fa = fa.Copy(state, "/tekton/results", "/tekton/", &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
+		fstate := ft.File(fa, llb.IgnoreCache)
+
+		fdef, err := fstate.Marshal(ctx) // FIXME Ignore this later on
+		if err != nil {
+			return llb.State{}, err
+		}
+		fres, err := c.Solve(ctx, client.SolveRequest{
+			Definition: fdef.ToPB(),
+		})
+		if err != nil {
+			return llb.State{}, err
+		}
+		fref, err := fres.SingleRef()
+		if err != nil {
+			return llb.State{}, err
+		}
+		fmt.Println("fref", fref)
+
+		// def, err := resultState.Marshal(ctx)
+		// if err != nil {
+		// 	return llb.State{}, err
+		// }
+		// res, err := c.Solve(ctx, client.SolveRequest{
+		// 	Definition: def.ToPB(),
+		// })
+		// if err != nil {
+		// 	return llb.State{}, err
+		// }
+		//
+		// ref, err := res.SingleRef()
+		// if err != nil {
+		// 	return llb.State{}, err
+		// }
+		// fmt.Println("ref", ref)
+		dirs, err := fref.ReadDir(ctx, client.ReadDirRequest{Path: "/tekton/results/"})
+		if err != nil {
+			return llb.State{}, err
+		}
+		fmt.Println("dirs", dirs)
+		return llb.State{}, fmt.Errorf("dirs %+v", dirs)
+		output := ""
+		for _, d := range dirs {
+			data, err := fref.ReadFile(ctx, client.ReadRequest{
+				Filename: d.Path,
+			})
+			if err != nil {
+				return llb.State{}, err
+			}
+			output += string(data)
+			output += "\n"
+		}
+		return llb.State{}, fmt.Errorf("output", output)
+		dt, err := fref.ReadFile(ctx, client.ReadRequest{
+			Filename: "/tekton/sum",
+		})
+		if err != nil {
+			return llb.State{}, err
+		}
+		fmt.Println("dt", dt)
+
 	}
 	fmt.Println("yo")
 
@@ -168,8 +259,9 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 				)
 			}
 		}
-		resultState := llb.Scratch()
-		stepStates, err := pstepToState(c, steps, resultState, mounts)
+		// resultState := llb.Scratch()
+		// stepStates, err := pstepToState(c, steps, resultState, mounts)
+		stepStates, err := pstepToState(c, steps, mounts)
 		if err != nil {
 			return llb.State{}, err
 		}

@@ -22,6 +22,10 @@ spec:
       command: ["/bin/sh", "-c"]
       args:
         - echo -n $((${OP1}+${OP2})) | tee $(results.sum.path);
+    - name: echo
+      image: bash:latest
+      script: |
+        [[ `cat $(results.sum.path)` == "12" ]]
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline

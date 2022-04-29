@@ -1,10 +1,10 @@
 name: dagger (test)
 
-# on:
-#   push:
-#     branches: [ main, 'release/**' ]
-#   pull_request:
-#     branches: [ main ]
+on:
+  push:
+    branches: [ main, 'release/**' ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   ci:
@@ -17,6 +17,8 @@ jobs:
       uses: dagger/dagger-for-github@v2
       with:
         install-only: true
+    - name: Dagger project update
+      run: dagger project update
     - name: image
       run: dagger do --log-format=plain image
     - name: "tkn-local"

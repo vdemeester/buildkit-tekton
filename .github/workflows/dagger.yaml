@@ -14,7 +14,7 @@ jobs:
       with:
         fetch-depth: 1
     - name: install dagger
-      uses: dagger/dagger-for-github@v2
+      uses: dagger/dagger-for-github@v3
       with:
         install-only: true
     - name: image

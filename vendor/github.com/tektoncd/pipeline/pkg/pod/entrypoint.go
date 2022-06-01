@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -70,6 +71,10 @@ var (
 	binVolume = corev1.Volume{
 		Name:         binVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
+	internalStepsMount = corev1.VolumeMount{
+		Name:      "tekton-internal-steps",
+		MountPath: pipeline.StepsDir,
 	}
 
 	// TODO(#1605): Signal sidecar readiness by injecting entrypoint,
@@ -208,6 +213,11 @@ func init() {
 // UpdateReady updates the Pod's annotations to signal the first step to start
 // by projecting the ready annotation via the Downward API.
 func UpdateReady(ctx context.Context, kubeclient kubernetes.Interface, pod corev1.Pod) error {
+	// Don't PATCH if the annotation is already Ready.
+	if pod.Annotations[readyAnnotation] == readyAnnotationValue {
+		return nil
+	}
+
 	// PATCH the Pod's annotations to replace the ready annotation with the
 	// "READY" value, to signal the first step to start.
 	_, err := kubeclient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.JSONPatchType, replaceReadyPatchBytes, metav1.PatchOptions{})

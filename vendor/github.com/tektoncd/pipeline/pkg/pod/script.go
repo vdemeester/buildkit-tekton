@@ -97,12 +97,13 @@ func convertScripts(shellImageLinux string, shellImageWin string, steps []v1beta
 
 	breakpoints := []string{}
 	sideCarSteps := []v1beta1.Step{}
-	for _, step := range sidecars {
+	for _, sidecar := range sidecars {
+		c := sidecar.ToK8sContainer()
 		sidecarStep := v1beta1.Step{
-			Container: step.Container,
-			Script:    step.Script,
-			Timeout:   &metav1.Duration{},
+			Script:  sidecar.Script,
+			Timeout: &metav1.Duration{},
 		}
+		sidecarStep.SetContainerFields(*c)
 		sideCarSteps = append(sideCarSteps, sidecarStep)
 	}
 
@@ -129,9 +130,18 @@ func convertScripts(shellImageLinux string, shellImageWin string, steps []v1beta
 func convertListOfSteps(steps []v1beta1.Step, initContainer *corev1.Container, placeScripts *bool, breakpoints []string, namePrefix string) []corev1.Container {
 	containers := []corev1.Container{}
 	for i, s := range steps {
+		// Add debug mounts if breakpoints are present
+		if len(breakpoints) > 0 {
+			debugInfoVolumeMount := corev1.VolumeMount{
+				Name:      debugInfoVolumeName,
+				MountPath: filepath.Join(debugInfoDir, fmt.Sprintf("%d", i)),
+			}
+			steps[i].VolumeMounts = append(steps[i].VolumeMounts, debugScriptsVolumeMount, debugInfoVolumeMount)
+		}
+
 		if s.Script == "" {
 			// Nothing to convert.
-			containers = append(containers, s.Container)
+			containers = append(containers, *steps[i].ToK8sContainer())
 			continue
 		}
 
@@ -186,19 +196,15 @@ cat > ${scriptfile} << '%s'
 		}
 		steps[i].VolumeMounts = append(steps[i].VolumeMounts, scriptsVolumeMount)
 
-		// Add debug mounts if breakpoints are present
-		if len(breakpoints) > 0 {
-			debugInfoVolumeMount := corev1.VolumeMount{
-				Name:      debugInfoVolumeName,
-				MountPath: filepath.Join(debugInfoDir, fmt.Sprintf("%d", i)),
-			}
-			steps[i].VolumeMounts = append(steps[i].VolumeMounts, debugScriptsVolumeMount, debugInfoVolumeMount)
-		}
-		containers = append(containers, steps[i].Container)
+		containers = append(containers, *steps[i].ToK8sContainer())
 	}
 
 	// Place debug scripts if breakpoints are enabled
 	if len(breakpoints) > 0 {
+		// If breakpoint is not nil then should add the init container
+		// to write debug script files
+		*placeScripts = true
+
 		type script struct {
 			name    string
 			content string

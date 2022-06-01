@@ -53,6 +53,9 @@ const (
 	// to resource constraints on the node
 	ReasonExceededNodeResources = "ExceededNodeResources"
 
+	// ReasonPullImageFailed indicates that the TaskRun's pod failed to pull image
+	ReasonPullImageFailed = "PullImageFailed"
+
 	// ReasonCreateContainerConfigError indicates that the TaskRun failed to create a pod due to
 	// config error of container
 	ReasonCreateContainerConfigError = "CreateContainerConfigError"
@@ -224,9 +227,18 @@ func filterResultsAndResources(results []v1beta1.PipelineResourceResult) ([]v1be
 	for _, r := range results {
 		switch r.ResultType {
 		case v1beta1.TaskRunResultType:
+			aos := v1beta1.ArrayOrString{}
+			err := aos.UnmarshalJSON([]byte(r.Value))
+			if err != nil {
+				continue
+			}
+			// TODO(#4723): Validate that the type we inferred from aos is matching the
+			// TaskResult Type before setting it to the taskRunResult.
+			// TODO(#4723): Validate the taskrun results against taskresults for object val
 			taskRunResult := v1beta1.TaskRunResult{
 				Name:  r.Key,
-				Value: r.Value,
+				Type:  v1beta1.ResultsType(aos.Type),
+				Value: aos,
 			}
 			taskResults = append(taskResults, taskRunResult)
 			filteredResults = append(filteredResults, r)
@@ -314,6 +326,8 @@ func updateIncompleteTaskRunStatus(trs *v1beta1.TaskRunStatus, pod *corev1.Pod) 
 			markStatusRunning(trs, ReasonExceededNodeResources, "TaskRun Pod exceeded available resources")
 		case isPodHitConfigError(pod):
 			markStatusFailure(trs, ReasonCreateContainerConfigError, "Failed to create pod due to config error")
+		case isPullImageError(pod):
+			markStatusRunning(trs, ReasonPullImageFailed, getWaitingMessage(pod))
 		default:
 			markStatusRunning(trs, ReasonPending, getWaitingMessage(pod))
 		}
@@ -402,6 +416,34 @@ func IsPodExceedingNodeResources(pod *corev1.Pod) bool {
 func isPodHitConfigError(pod *corev1.Pod) bool {
 	for _, containerStatus := range pod.Status.ContainerStatuses {
 		if containerStatus.State.Waiting != nil && containerStatus.State.Waiting.Reason == ReasonCreateContainerConfigError {
+			return true
+		}
+	}
+	return false
+}
+
+// isPullImageError returns true if the Pod's status indicates there are any error when pulling image
+func isPullImageError(pod *corev1.Pod) bool {
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.State.Waiting != nil && isImageErrorReason(containerStatus.State.Waiting.Reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func isImageErrorReason(reason string) bool {
+	// Reference from https://github.com/kubernetes/kubernetes/blob/a1c8e9386af844757333733714fa1757489735b3/pkg/kubelet/images/types.go#L26
+	imageErrorReasons := []string{
+		"ImagePullBackOff",
+		"ImageInspectError",
+		"ErrImagePull",
+		"ErrImageNeverPull",
+		"RegistryUnavailable",
+		"InvalidImageName",
+	}
+	for _, imageReason := range imageErrorReasons {
+		if imageReason == reason {
 			return true
 		}
 	}

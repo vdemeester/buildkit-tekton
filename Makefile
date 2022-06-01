@@ -3,7 +3,7 @@ IMAGE_REFERENCE = ghcr.io/vdemeester/buildkit-tekton/frontend
 RUNTIME         = docker
 
 
-all: image/push
+all: image
 
 .PHONY: image/push
 image/push: image

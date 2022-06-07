@@ -11,7 +11,7 @@ replace (
 )
 
 require (
-	github.com/docker/cli v20.10.16+incompatible
+	github.com/docker/cli v20.10.17+incompatible
 	github.com/docker/distribution v2.8.1+incompatible
 	github.com/google/go-cmp v0.5.8
 	github.com/moby/buildkit v0.10.3

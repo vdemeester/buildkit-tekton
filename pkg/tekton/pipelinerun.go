@@ -216,9 +216,6 @@ func validatePipeline(ctx context.Context, p v1beta1.PipelineSpec) error {
 		return errors.New("Finally are not supporte (yet)")
 	}
 	for _, pt := range p.Tasks {
-		if len(pt.Conditions) > 0 {
-			return errors.Errorf("Task %s: Conditions not supported", pt.Name)
-		}
 		if len(pt.WhenExpressions) > 0 {
 			return errors.Errorf("Task %s: WhenExpressions not supported", pt.Name)
 		}

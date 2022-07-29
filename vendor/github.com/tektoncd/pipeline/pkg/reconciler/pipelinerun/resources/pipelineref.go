@@ -23,9 +23,9 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
+	rprp "github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/pipelinespec"
 	"github.com/tektoncd/pipeline/pkg/remote"
 	"github.com/tektoncd/pipeline/pkg/remote/oci"
 	"github.com/tektoncd/pipeline/pkg/remote/resolution"
@@ -38,7 +38,7 @@ import (
 // GetPipelineFunc is a factory function that will use the given PipelineRef to return a valid GetPipeline function that
 // looks up the pipeline. It uses as context a k8s client, tekton client, namespace, and service account name to return
 // the pipeline. It knows whether it needs to look in the cluster or in a remote location to fetch the reference.
-func GetPipelineFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester, pipelineRun *v1beta1.PipelineRun) (GetPipeline, error) {
+func GetPipelineFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester, pipelineRun *v1beta1.PipelineRun) (rprp.GetPipeline, error) {
 	cfg := config.FromContextOrDefaults(ctx)
 	pr := pipelineRun.Spec.PipelineRef
 	namespace := pipelineRun.Namespace
@@ -130,13 +130,6 @@ func readRuntimeObjectAsPipeline(ctx context.Context, obj runtime.Object) (v1bet
 	if pipeline, ok := obj.(v1beta1.PipelineObject); ok {
 		pipeline.SetDefaults(ctx)
 		return pipeline, nil
-	}
-
-	if pipeline, ok := obj.(*v1alpha1.Pipeline); ok {
-		betaPipeline := &v1beta1.Pipeline{}
-		err := pipeline.ConvertTo(ctx, betaPipeline)
-		betaPipeline.SetDefaults(ctx)
-		return betaPipeline, err
 	}
 
 	return nil, errors.New("resource is not a pipeline")

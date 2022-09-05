@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/streams"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/session"
@@ -106,7 +107,8 @@ func run(opts *runOption) error {
 		return err
 	}
 
-	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(os.Stderr)}
+	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
+	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig)}
 	buildopts := client.SolveOpt{
 		LocalDirs: map[string]string{
 			"context":    dir,

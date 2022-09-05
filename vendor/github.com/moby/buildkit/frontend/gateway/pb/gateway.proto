@@ -48,6 +48,7 @@ message Result {
 		RefMap refs = 4;
 	}
 	map<string, bytes> metadata = 10;
+	map<string, Attestations> attestations = 11;
 }
 
 message RefMapDeprecated {
@@ -62,6 +63,36 @@ message Ref {
 message RefMap {
 	map<string, Ref> refs = 1;
 }
+
+message Attestations {
+	message Attestation {
+		oneof Attestation {
+			InToto intoto = 1;
+		}
+	}
+	repeated Attestation attestation = 1;
+}
+
+message InToto {
+	string predicateType = 1;
+	string predicateRefKey = 2;
+	string predicatePath = 3;
+
+	message Subject {
+		message SelfSubject {
+		}
+		message RawSubject {
+			repeated string Digest = 1 [(gogoproto.customtype) = "github.com/opencontainers/go-digest.Digest", (gogoproto.nullable) = false];
+			string name = 2;
+		}
+		oneof Subject {
+			SelfSubject self = 1;
+			RawSubject raw = 2;
+		}
+	}
+	repeated Subject subjects = 4;
+}
+
 
 message ReturnRequest {
 	Result result = 1;
@@ -83,6 +114,8 @@ message ResolveImageConfigRequest {
 	pb.Platform Platform = 2;
 	string ResolveMode = 3;
 	string LogName = 4;
+	int32 ResolverType = 5;
+	string SessionID = 6;
 }
 
 message ResolveImageConfigResponse {
@@ -94,11 +127,7 @@ message SolveRequest {
 	pb.Definition Definition = 1;
 	string Frontend = 2;
 	map<string, string> FrontendOpt = 3;
-	// ImportCacheRefsDeprecated is deprecated in favor or the new Imports since BuildKit v0.4.0.
-	// When ImportCacheRefsDeprecated is set, the solver appends
-	// {.Type = "registry", .Attrs = {"ref": importCacheRef}}
-	// for each of the ImportCacheRefs entry to CacheImports for compatibility. (planned to be removed)
-	repeated string ImportCacheRefsDeprecated = 4;
+	// 4 was removed in BuildKit v0.11.0.
 	bool allowResultReturn = 5;
 	bool allowResultArrayRef = 6;
 	

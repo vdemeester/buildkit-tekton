@@ -24,6 +24,7 @@ import (
 	"github.com/moby/buildkit/util/entitlements"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"github.com/tonistiigi/fsutil"
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
@@ -32,6 +33,7 @@ import (
 type SolveOpt struct {
 	Exports               []ExportEntry
 	LocalDirs             map[string]string
+	OCIStores             map[string]content.Store
 	SharedKey             string
 	Frontend              string
 	FrontendAttrs         map[string]string
@@ -157,8 +159,27 @@ func (c *Client) solve(ctx context.Context, def *llb.Definition, runGateway runG
 			}
 		}
 
-		if len(cacheOpt.contentStores) > 0 {
-			s.Allow(sessioncontent.NewAttachable(cacheOpt.contentStores))
+		// this is a new map that contains both cacheOpt stores and OCILayout stores
+		contentStores := make(map[string]content.Store, len(cacheOpt.contentStores)+len(opt.OCIStores))
+		// copy over the stores references from cacheOpt
+		for key, store := range cacheOpt.contentStores {
+			contentStores[key] = store
+		}
+		// copy over the stores references from ociLayout opts
+		for key, store := range opt.OCIStores {
+			// conflicts are not allowed
+			if _, ok := contentStores[key]; ok {
+				// we probably should check if the store is identical, but given that
+				// https://pkg.go.dev/github.com/containerd/containerd/content#Store
+				// is just an interface, composing 4 others, that is rather hard to do.
+				// For a future iteration.
+				return nil, errors.Errorf("contentStore key %s exists in both cache and OCI layouts", key)
+			}
+			contentStores[key] = store
+		}
+
+		if len(contentStores) > 0 {
+			s.Allow(sessioncontent.NewAttachable(contentStores))
 		}
 
 		eg.Go(func() error {
@@ -188,8 +209,10 @@ func (c *Client) solve(ctx context.Context, def *llb.Definition, runGateway runG
 				<-time.After(3 * time.Second)
 				cancelStatus()
 			}()
-			bklog.G(ctx).Debugf("stopping session")
-			s.Close()
+			if !opt.SessionPreInitialized {
+				bklog.G(ctx).Debugf("stopping session")
+				s.Close()
+			}
 		}()
 		var pbd *pb.Definition
 		if def != nil {
@@ -342,10 +365,10 @@ func prepareSyncedDirs(def *llb.Definition, localDirs map[string]string) ([]file
 			return nil, errors.Errorf("%s not a directory", d)
 		}
 	}
-	resetUIDAndGID := func(p string, st *fstypes.Stat) bool {
+	resetUIDAndGID := func(p string, st *fstypes.Stat) fsutil.MapResult {
 		st.Uid = 0
 		st.Gid = 0
-		return true
+		return fsutil.MapResultKeep
 	}
 
 	dirs := make([]filesync.SyncedDir, 0, len(localDirs))
@@ -393,14 +416,10 @@ func parseCacheOptions(ctx context.Context, isGateway bool, opt SolveOpt) (*cach
 	var (
 		cacheExports []*controlapi.CacheOptionsEntry
 		cacheImports []*controlapi.CacheOptionsEntry
-		// legacy API is used for registry caches, because the daemon might not support the new API
-		legacyExportRef  string
-		legacyImportRefs []string
 	)
 	contentStores := make(map[string]content.Store)
 	indicesToUpdate := make(map[string]string) // key: index.JSON file name, value: tag
 	frontendAttrs := make(map[string]string)
-	legacyExportAttrs := make(map[string]string)
 	for _, ex := range opt.CacheExports {
 		if ex.Type == "local" {
 			csDir := ex.Attrs["dest"]
@@ -419,19 +438,16 @@ func parseCacheOptions(ctx context.Context, isGateway bool, opt SolveOpt) (*cach
 			indexJSONPath := filepath.Join(csDir, "index.json")
 			indicesToUpdate[indexJSONPath] = "latest"
 		}
-		if ex.Type == "registry" && legacyExportRef == "" {
-			legacyExportRef = ex.Attrs["ref"]
-			for k, v := range ex.Attrs {
-				if k != "ref" {
-					legacyExportAttrs[k] = v
-				}
+		if ex.Type == "registry" {
+			regRef := ex.Attrs["ref"]
+			if regRef == "" {
+				return nil, errors.New("registry cache exporter requires ref")
 			}
-		} else {
-			cacheExports = append(cacheExports, &controlapi.CacheOptionsEntry{
-				Type:  ex.Type,
-				Attrs: ex.Attrs,
-			})
 		}
+		cacheExports = append(cacheExports, &controlapi.CacheOptionsEntry{
+			Type:  ex.Type,
+			Attrs: ex.Attrs,
+		})
 	}
 	for _, im := range opt.CacheImports {
 		attrs := im.Attrs
@@ -465,21 +481,17 @@ func parseCacheOptions(ctx context.Context, isGateway bool, opt SolveOpt) (*cach
 			contentStores["local:"+csDir] = cs
 		}
 		if im.Type == "registry" {
-			legacyImportRef := attrs["ref"]
-			legacyImportRefs = append(legacyImportRefs, legacyImportRef)
-		} else {
-			cacheImports = append(cacheImports, &controlapi.CacheOptionsEntry{
-				Type:  im.Type,
-				Attrs: attrs,
-			})
+			regRef := im.Attrs["ref"]
+			if regRef == "" {
+				return nil, errors.New("registry cache importer requires ref")
+			}
 		}
+		cacheImports = append(cacheImports, &controlapi.CacheOptionsEntry{
+			Type:  im.Type,
+			Attrs: attrs,
+		})
 	}
 	if opt.Frontend != "" || isGateway {
-		// use legacy API for registry importers, because the frontend might not support the new API
-		if len(legacyImportRefs) > 0 {
-			frontendAttrs["cache-from"] = strings.Join(legacyImportRefs, ",")
-		}
-		// use new API for other importers
 		if len(cacheImports) > 0 {
 			s, err := json.Marshal(cacheImports)
 			if err != nil {
@@ -490,11 +502,6 @@ func parseCacheOptions(ctx context.Context, isGateway bool, opt SolveOpt) (*cach
 	}
 	res := cacheOptions{
 		options: controlapi.CacheOptions{
-			// old API (for registry caches, planned to be removed in early 2019)
-			ExportRefDeprecated:   legacyExportRef,
-			ExportAttrsDeprecated: legacyExportAttrs,
-			ImportRefsDeprecated:  legacyImportRefs,
-			// new API
 			Exports: cacheExports,
 			Imports: cacheImports,
 		},

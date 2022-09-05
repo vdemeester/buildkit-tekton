@@ -14,6 +14,7 @@ import (
 	"github.com/moby/buildkit/client"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer" // import the container connection driver
 	_ "github.com/moby/buildkit/client/connhelper/podmancontainer" // import the container connection driver
+	_ "github.com/moby/buildkit/client/connhelper/ssh"             // import the container connection driver
 	"github.com/pkg/errors"
 )
 

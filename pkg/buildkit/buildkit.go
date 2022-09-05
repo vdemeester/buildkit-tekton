@@ -53,6 +53,7 @@ func init() {
 // - docker-container://<container>?context=<context> : buildkitd runs into a docker container (create and start if doesn't exists)
 // - podman-container://<container> : buildkitd runs into a podman container (create and start if doesn't exists)
 // - unix://<path> : buildkitd runs directly on the host (fail if doesn't exists)
+// - ssh://<host>/<path>
 //
 // If host is empty, we will look at the follow environment variables
 // - TKN_LOCAL_HOST : same schema as host parameter
@@ -87,7 +88,7 @@ func NewClient(ctx context.Context, host string) (*client.Client, error) {
 
 func start(ctx context.Context, host string) error {
 	switch {
-	case strings.HasPrefix(host, "unix://"):
+	case strings.HasPrefix(host, "unix://") || strings.HasPrefix(host, "ssh://"):
 		return nil
 	case strings.HasPrefix(host, "docker-container://"):
 		if err := checkDocker(ctx); err != nil {

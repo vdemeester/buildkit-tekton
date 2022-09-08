@@ -13,7 +13,7 @@ replace (
 require (
 	github.com/docker/cli v20.10.17+incompatible
 	github.com/docker/distribution v2.8.1+incompatible
-	github.com/google/go-cmp v0.5.8
+	github.com/google/go-cmp v0.5.9
 	// github.com/moby/buildkit v0.10.4
 	github.com/moby/buildkit v0.10.1-0.20220902161658-2254cfedac10
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6

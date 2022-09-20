@@ -20,16 +20,18 @@ import (
 	"context"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	apisconfig "github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	runv1alpha1 "github.com/tektoncd/pipeline/pkg/apis/run/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/utils/clock"
 	"knative.dev/pkg/apis"
 	duckv1beta1 "knative.dev/pkg/apis/duck/v1beta1"
 )
@@ -83,7 +85,7 @@ func (pr *PipelineRun) HasStarted() bool {
 
 // IsCancelled returns true if the PipelineRun's spec status is set to Cancelled state
 func (pr *PipelineRun) IsCancelled() bool {
-	return pr.Spec.Status == PipelineRunSpecStatusCancelled || pr.Spec.Status == PipelineRunSpecStatusCancelledDeprecated
+	return pr.Spec.Status == PipelineRunSpecStatusCancelled
 }
 
 // IsGracefullyCancelled returns true if the PipelineRun's spec status is set to CancelledRunFinally state
@@ -172,6 +174,40 @@ func (pr *PipelineRun) HasTimedOut(ctx context.Context, c clock.PassiveClock) bo
 	return false
 }
 
+// HaveTasksTimedOut returns true if a pipelinerun has exceeded its spec.Timeouts.Tasks
+func (pr *PipelineRun) HaveTasksTimedOut(ctx context.Context, c clock.PassiveClock) bool {
+	timeout := pr.TasksTimeout()
+	startTime := pr.Status.StartTime
+
+	if !startTime.IsZero() && timeout != nil {
+		if timeout.Duration == config.NoTimeoutDuration {
+			return false
+		}
+		runtime := c.Since(startTime.Time)
+		if runtime > timeout.Duration {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFinallyTimedOut returns true if a pipelinerun has exceeded its spec.Timeouts.Finally, based on status.FinallyStartTime
+func (pr *PipelineRun) HasFinallyTimedOut(ctx context.Context, c clock.PassiveClock) bool {
+	timeout := pr.FinallyTimeout()
+	startTime := pr.Status.FinallyStartTime
+
+	if startTime != nil && !startTime.IsZero() && timeout != nil {
+		if timeout.Duration == config.NoTimeoutDuration {
+			return false
+		}
+		runtime := c.Since(startTime.Time)
+		if runtime > timeout.Duration {
+			return true
+		}
+	}
+	return false
+}
+
 // HasVolumeClaimTemplate returns true if PipelineRun contains volumeClaimTemplates that is
 // used for creating PersistentVolumeClaims with an OwnerReference for each run
 func (pr *PipelineRun) HasVolumeClaimTemplate() bool {
@@ -216,7 +252,7 @@ type PipelineRunSpec struct {
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 	// PodTemplate holds pod specific configuration
-	PodTemplate *PodTemplate `json:"podTemplate,omitempty"`
+	PodTemplate *pod.PodTemplate `json:"podTemplate,omitempty"`
 	// Workspaces holds a set of workspace bindings that must match names
 	// with those declared in the pipeline.
 	// +optional
@@ -242,10 +278,6 @@ type TimeoutFields struct {
 type PipelineRunSpecStatus string
 
 const (
-	// PipelineRunSpecStatusCancelledDeprecated Deprecated: indicates that the user wants to cancel the task,
-	// if not already cancelled or terminated (replaced by "Cancelled")
-	PipelineRunSpecStatusCancelledDeprecated = "PipelineRunCancelled"
-
 	// PipelineRunSpecStatusCancelled indicates that the user wants to cancel the task,
 	// if not already cancelled or terminated
 	PipelineRunSpecStatusCancelled = "Cancelled"
@@ -263,25 +295,6 @@ const (
 	// until some condition is met
 	PipelineRunSpecStatusPending = "PipelineRunPending"
 )
-
-// PipelineRef can be used to refer to a specific instance of a Pipeline.
-// Copied from CrossVersionObjectReference: https://github.com/kubernetes/kubernetes/blob/169df7434155cbbc22f1532cba8e0a9588e29ad8/pkg/apis/autoscaling/types.go#L64
-type PipelineRef struct {
-	// Name of the referent; More info: http://kubernetes.io/docs/user-guide/identifiers#names
-	Name string `json:"name,omitempty"`
-	// API version of the referent
-	// +optional
-	APIVersion string `json:"apiVersion,omitempty"`
-	// Bundle url reference to a Tekton Bundle.
-	// +optional
-	Bundle string `json:"bundle,omitempty"`
-
-	// ResolverRef allows referencing a Pipeline in a remote location
-	// like a git repo. This field is only supported when the alpha
-	// feature gate is enabled.
-	// +optional
-	ResolverRef `json:",omitempty"`
-}
 
 // PipelineRunStatus defines the observed state of PipelineRun
 type PipelineRunStatus struct {
@@ -439,6 +452,10 @@ type PipelineRunStatusFields struct {
 	// +optional
 	// +listType=atomic
 	ChildReferences []ChildStatusReference `json:"childReferences,omitempty"`
+
+	// FinallyStartTime is when all non-finally tasks have been completed and only finally tasks are being executed.
+	// +optional
+	FinallyStartTime *metav1.Time `json:"finallyStartTime,omitempty"`
 }
 
 // SkippedTask is used to describe the Tasks that were skipped due to their When Expressions
@@ -471,6 +488,12 @@ const (
 	GracefullyStoppedSkip SkippingReason = "PipelineRun was gracefully stopped"
 	// MissingResultsSkip means the task was skipped because it's missing necessary results
 	MissingResultsSkip SkippingReason = "Results were missing"
+	// PipelineTimedOutSkip means the task was skipped because the PipelineRun has passed its overall timeout.
+	PipelineTimedOutSkip SkippingReason = "PipelineRun timeout has been reached"
+	// TasksTimedOutSkip means the task was skipped because the PipelineRun has passed its Timeouts.Tasks.
+	TasksTimedOutSkip SkippingReason = "PipelineRun Tasks timeout has been reached"
+	// FinallyTimedOutSkip means the task was skipped because the PipelineRun has passed its Timeouts.Finally.
+	FinallyTimedOutSkip SkippingReason = "PipelineRun Finally timeout has been reached"
 	// None means the task was not skipped
 	None SkippingReason = "None"
 )
@@ -481,7 +504,7 @@ type PipelineRunResult struct {
 	Name string `json:"name"`
 
 	// Value is the result returned from the execution of this PipelineRun
-	Value string `json:"value"`
+	Value ResultValue `json:"value"`
 }
 
 // PipelineRunTaskRunStatus contains the name of the PipelineTask for this TaskRun and the TaskRun's Status
@@ -530,9 +553,9 @@ type PipelineTaskRun struct {
 // PipelineTaskRunSpec  can be used to configure specific
 // specs for a concrete Task
 type PipelineTaskRunSpec struct {
-	PipelineTaskName       string       `json:"pipelineTaskName,omitempty"`
-	TaskServiceAccountName string       `json:"taskServiceAccountName,omitempty"`
-	TaskPodTemplate        *PodTemplate `json:"taskPodTemplate,omitempty"`
+	PipelineTaskName       string           `json:"pipelineTaskName,omitempty"`
+	TaskServiceAccountName string           `json:"taskServiceAccountName,omitempty"`
+	TaskPodTemplate        *pod.PodTemplate `json:"taskPodTemplate,omitempty"`
 	// +listType=atomic
 	StepOverrides []TaskRunStepOverride `json:"stepOverrides,omitempty"`
 	// +listType=atomic
@@ -540,6 +563,9 @@ type PipelineTaskRunSpec struct {
 
 	// +optional
 	Metadata *PipelineTaskMetadata `json:"metadata,omitempty"`
+
+	// Compute resources to use for this TaskRun
+	ComputeResources *corev1.ResourceRequirements `json:"computeResources,omitempty"`
 }
 
 // GetTaskRunSpec returns the task specific spec for a given
@@ -561,6 +587,7 @@ func (pr *PipelineRun) GetTaskRunSpec(pipelineTaskName string) PipelineTaskRunSp
 			s.StepOverrides = task.StepOverrides
 			s.SidecarOverrides = task.SidecarOverrides
 			s.Metadata = task.Metadata
+			s.ComputeResources = task.ComputeResources
 		}
 	}
 	return s

@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	"github.com/tektoncd/pipeline/pkg/apis/version"
 
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipeline/dag"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -122,12 +123,17 @@ type PipelineResult struct {
 	// Name the given name
 	Name string `json:"name"`
 
+	// Type is the user-specified type of the result.
+	// The possible types are 'string', 'array', and 'object', with 'string' as the default.
+	// 'array' and 'object' types are alpha features.
+	Type ResultsType `json:"type,omitempty"`
+
 	// Description is a human-readable description of the result
 	// +optional
 	Description string `json:"description"`
 
 	// Value the expression used to retrieve the value
-	Value string `json:"value"`
+	Value ResultValue `json:"value"`
 }
 
 // PipelineTaskMetadata contains the labels or annotations for an EmbeddedTask
@@ -198,8 +204,7 @@ type PipelineTask struct {
 
 	// Matrix declares parameters used to fan out this task.
 	// +optional
-	// +listType=atomic
-	Matrix []Param `json:"matrix,omitempty"`
+	Matrix *Matrix `json:"matrix,omitempty"`
 
 	// Workspaces maps workspaces from the pipeline spec to the workspaces
 	// declared in the Task.
@@ -212,6 +217,16 @@ type PipelineTask struct {
 	// Refer Go's ParseDuration documentation for expected format: https://golang.org/pkg/time/#ParseDuration
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
+}
+
+// Matrix is used to fan out Tasks in a Pipeline
+type Matrix struct {
+	// Params is a list of parameters used to fan out the pipelineTask
+	// Params takes only `Parameters` of type `"array"`
+	// Each array element is supplied to the `PipelineTask` by substituting `params` of type `"string"` in the underlying `Task`.
+	// The names of the `params` in the `Matrix` must match the names of the `params` in the underlying `Task` that they will be substituting.
+	// +listType=atomic
+	Params []Param `json:"params,omitempty"`
 }
 
 // validateRefOrSpec validates at least one of taskRef or taskSpec is specified
@@ -289,7 +304,7 @@ func (pt PipelineTask) validateTask(ctx context.Context) (errs *apis.FieldError)
 			if pt.TaskRef.Resolver != "" {
 				errs = errs.Also(apis.ErrDisallowedFields("taskref.resolver"))
 			}
-			if len(pt.TaskRef.Resource) > 0 {
+			if len(pt.TaskRef.Params) > 0 {
 				errs = errs.Also(apis.ErrDisallowedFields("taskref.resource"))
 			}
 		}
@@ -297,11 +312,19 @@ func (pt PipelineTask) validateTask(ctx context.Context) (errs *apis.FieldError)
 	return errs
 }
 
+// IsMatrixed return whether pipeline task is matrixed
+func (pt *PipelineTask) IsMatrixed() bool {
+	return pt.Matrix != nil && len(pt.Matrix.Params) > 0
+}
+
 func (pt *PipelineTask) validateMatrix(ctx context.Context) (errs *apis.FieldError) {
-	if len(pt.Matrix) != 0 {
+	if pt.IsMatrixed() {
 		// This is an alpha feature and will fail validation if it's used in a pipeline spec
 		// when the enable-api-fields feature gate is anything but "alpha".
-		errs = errs.Also(ValidateEnabledAPIFields(ctx, "matrix", config.AlphaAPIFields))
+		errs = errs.Also(version.ValidateEnabledAPIFields(ctx, "matrix", config.AlphaAPIFields))
+		// Matrix requires "embedded-status" feature gate to be set to "minimal", and will fail
+		// validation if it is anything but "minimal".
+		errs = errs.Also(ValidateEmbeddedStatus(ctx, "matrix", config.MinimalEmbeddedStatus))
 		errs = errs.Also(pt.validateMatrixCombinationsCount(ctx))
 	}
 	errs = errs.Also(validateParameterInOneOfMatrixOrParams(pt.Matrix, pt.Params))
@@ -318,13 +341,33 @@ func (pt *PipelineTask) validateMatrixCombinationsCount(ctx context.Context) (er
 	return errs
 }
 
+func (pt PipelineTask) validateEmbeddedOrType() (errs *apis.FieldError) {
+	// Reject cases where APIVersion and/or Kind are specified alongside an embedded Task.
+	// We determine if this is an embedded Task by checking of TaskSpec.TaskSpec.Steps has items.
+	if pt.TaskSpec != nil && len(pt.TaskSpec.TaskSpec.Steps) > 0 {
+		if pt.TaskSpec.APIVersion != "" {
+			errs = errs.Also(&apis.FieldError{
+				Message: "taskSpec.apiVersion cannot be specified when using taskSpec.steps",
+				Paths:   []string{"taskSpec.apiVersion"},
+			})
+		}
+		if pt.TaskSpec.Kind != "" {
+			errs = errs.Also(&apis.FieldError{
+				Message: "taskSpec.kind cannot be specified when using taskSpec.steps",
+				Paths:   []string{"taskSpec.kind"},
+			})
+		}
+	}
+	return
+}
+
 // GetMatrixCombinationsCount returns the count of combinations of Parameters generated from the Matrix in PipelineTask.
 func (pt *PipelineTask) GetMatrixCombinationsCount() int {
-	if len(pt.Matrix) == 0 {
+	if !pt.IsMatrixed() {
 		return 0
 	}
 	count := 1
-	for _, param := range pt.Matrix {
+	for _, param := range pt.Matrix.Params {
 		count *= len(param.Value.ArrayVal)
 	}
 	return count
@@ -461,6 +504,9 @@ func (pt PipelineTask) ValidateName() *apis.FieldError {
 // calls the validation routine based on the type of the task
 func (pt PipelineTask) Validate(ctx context.Context) (errs *apis.FieldError) {
 	errs = errs.Also(pt.validateRefOrSpec())
+
+	errs = errs.Also(pt.validateEmbeddedOrType())
+
 	cfg := config.FromContextOrDefaults(ctx)
 	// If EnableCustomTasks feature flag is on, validate custom task specifications
 	// pipeline task having taskRef with APIVersion is classified as custom task
@@ -480,44 +526,29 @@ func (pt PipelineTask) Validate(ctx context.Context) (errs *apis.FieldError) {
 
 // Deps returns all other PipelineTask dependencies of this PipelineTask, based on resource usage or ordering
 func (pt PipelineTask) Deps() []string {
-	deps := []string{}
+	// hold the list of dependencies in a set to avoid duplicates
+	deps := sets.NewString()
 
-	deps = append(deps, pt.resourceDeps()...)
-	deps = append(deps, pt.orderingDeps()...)
-
-	uniqueDeps := sets.NewString()
-	for _, w := range deps {
-		if uniqueDeps.Has(w) {
-			continue
-		}
-		uniqueDeps.Insert(w)
-	}
-
-	return uniqueDeps.List()
-}
-
-func (pt PipelineTask) resourceDeps() []string {
-	resourceDeps := []string{}
+	// add any new dependents from a resource/workspace
 	if pt.Resources != nil {
 		for _, rd := range pt.Resources.Inputs {
-			resourceDeps = append(resourceDeps, rd.From...)
+			for _, f := range rd.From {
+				deps.Insert(f)
+			}
 		}
 	}
 
-	// Add any dependents from result references.
+	// add any new dependents from result references - resource dependency
 	for _, ref := range PipelineTaskResultRefs(&pt) {
-		resourceDeps = append(resourceDeps, ref.PipelineTask)
+		deps.Insert(ref.PipelineTask)
 	}
 
-	return resourceDeps
-}
-
-func (pt PipelineTask) orderingDeps() []string {
-	orderingDeps := []string{}
+	// add any new dependents from runAfter - order dependency
 	for _, runAfter := range pt.RunAfter {
-		orderingDeps = append(orderingDeps, runAfter)
+		deps.Insert(runAfter)
 	}
-	return orderingDeps
+
+	return deps.List()
 }
 
 // PipelineTaskList is a list of PipelineTasks

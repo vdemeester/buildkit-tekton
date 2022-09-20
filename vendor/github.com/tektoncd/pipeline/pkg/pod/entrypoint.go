@@ -108,42 +108,49 @@ var (
 // command, we must have fetched the image's ENTRYPOINT before calling this
 // method, using entrypoint_lookup.go.
 // Additionally, Step timeouts are added as entrypoint flag.
-func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1beta1.TaskSpec, breakpointConfig *v1beta1.TaskRunDebug) ([]corev1.Container, error) {
+func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1beta1.TaskSpec, breakpointConfig *v1beta1.TaskRunDebug, waitForReadyAnnotation bool) ([]corev1.Container, error) {
 	if len(steps) == 0 {
 		return nil, errors.New("No steps specified")
 	}
 
 	for i, s := range steps {
-		var argsForEntrypoint []string
+		var argsForEntrypoint = []string{}
 		idx := strconv.Itoa(i)
-		switch i {
-		case 0:
-			argsForEntrypoint = []string{
-				// First step waits for the Downward volume file.
-				"-wait_file", filepath.Join(downwardMountPoint, downwardMountReadyFile),
-				"-wait_file_content", // Wait for file contents, not just an empty file.
-				// Start next step.
-				"-post_file", filepath.Join(runDir, idx, "out"),
-				"-termination_path", terminationPath,
-				"-step_metadata_dir", filepath.Join(runDir, idx, "status"),
+		if i == 0 {
+			if waitForReadyAnnotation {
+				argsForEntrypoint = append(argsForEntrypoint,
+					// First step waits for the Downward volume file.
+					"-wait_file", filepath.Join(downwardMountPoint, downwardMountReadyFile),
+					"-wait_file_content", // Wait for file contents, not just an empty file.
+				)
 			}
-		default:
-			// All other steps wait for previous file, write next file.
-			argsForEntrypoint = []string{
-				"-wait_file", filepath.Join(runDir, strconv.Itoa(i-1), "out"),
-				"-post_file", filepath.Join(runDir, idx, "out"),
-				"-termination_path", terminationPath,
-				"-step_metadata_dir", filepath.Join(runDir, idx, "status"),
-			}
+		} else { // Not the first step - wait for previous
+			argsForEntrypoint = append(argsForEntrypoint, "-wait_file", filepath.Join(runDir, strconv.Itoa(i-1), "out"))
 		}
+		argsForEntrypoint = append(argsForEntrypoint,
+			// Start next step.
+			"-post_file", filepath.Join(runDir, idx, "out"),
+			"-termination_path", terminationPath,
+			"-step_metadata_dir", filepath.Join(runDir, idx, "status"),
+		)
 		argsForEntrypoint = append(argsForEntrypoint, commonExtraEntrypointArgs...)
 		if taskSpec != nil {
 			if taskSpec.Steps != nil && len(taskSpec.Steps) >= i+1 {
+				if taskSpec.Steps[i].OnError != "" {
+					if taskSpec.Steps[i].OnError != v1beta1.Continue && taskSpec.Steps[i].OnError != v1beta1.StopAndFail {
+						return nil, fmt.Errorf("task step onError must be either \"%s\" or \"%s\" but it is set to an invalid value \"%s\"",
+							v1beta1.Continue, v1beta1.StopAndFail, taskSpec.Steps[i].OnError)
+					}
+					argsForEntrypoint = append(argsForEntrypoint, "-on_error", string(taskSpec.Steps[i].OnError))
+				}
 				if taskSpec.Steps[i].Timeout != nil {
 					argsForEntrypoint = append(argsForEntrypoint, "-timeout", taskSpec.Steps[i].Timeout.Duration.String())
 				}
-				if taskSpec.Steps[i].OnError != "" {
-					argsForEntrypoint = append(argsForEntrypoint, "-on_error", taskSpec.Steps[i].OnError)
+				if taskSpec.Steps[i].StdoutConfig != nil {
+					argsForEntrypoint = append(argsForEntrypoint, "-stdout_path", taskSpec.Steps[i].StdoutConfig.Path)
+				}
+				if taskSpec.Steps[i].StderrConfig != nil {
+					argsForEntrypoint = append(argsForEntrypoint, "-stderr_path", taskSpec.Steps[i].StderrConfig.Path)
 				}
 			}
 			argsForEntrypoint = append(argsForEntrypoint, resultArgument(steps, taskSpec.Results)...)
@@ -173,8 +180,10 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 		steps[i].Args = argsForEntrypoint
 		steps[i].TerminationMessagePath = terminationPath
 	}
-	// Mount the Downward volume into the first step container.
-	steps[0].VolumeMounts = append(steps[0].VolumeMounts, downwardMount)
+	if waitForReadyAnnotation {
+		// Mount the Downward volume into the first step container.
+		steps[0].VolumeMounts = append(steps[0].VolumeMounts, downwardMount)
+	}
 
 	return steps, nil
 }

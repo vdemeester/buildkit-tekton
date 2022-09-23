@@ -15,7 +15,7 @@ require (
 	github.com/docker/distribution v2.8.1+incompatible
 	github.com/google/go-cmp v0.5.8
 	// github.com/moby/buildkit v0.10.4
-	github.com/moby/buildkit v0.10.1-0.20220902161658-2254cfedac10
+	github.com/moby/buildkit v0.10.1-0.20220922045954-60352cb0f78a
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.0

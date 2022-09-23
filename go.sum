@@ -504,8 +504,8 @@ github.com/mitchellh/iochan v1.0.0/go.mod h1:JwYml1nuB7xOzsp52dPpHFffvOCDupsG0Qu
 github.com/mitchellh/mapstructure v0.0.0-20160808181253-ca63d7c062ee/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
 github.com/mitchellh/mapstructure v1.1.2/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
 github.com/mitchellh/mapstructure v1.3.3/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
-github.com/moby/buildkit v0.10.1-0.20220902161658-2254cfedac10 h1:T1r+9pMvPZ9TmeDcs28YFzgfJJsZGkZP4d92JiC7w6E=
-github.com/moby/buildkit v0.10.1-0.20220902161658-2254cfedac10/go.mod h1:ZNo3s+03ZWSH5/rdt7p150Rel4FJGX00KebbZHLRnAQ=
+github.com/moby/buildkit v0.10.1-0.20220922045954-60352cb0f78a h1:E+/ZD77bhyGUv8nwCyTdgYRfNWOfz9aYjGmDSEbtq3s=
+github.com/moby/buildkit v0.10.1-0.20220922045954-60352cb0f78a/go.mod h1:ZNo3s+03ZWSH5/rdt7p150Rel4FJGX00KebbZHLRnAQ=
 github.com/moby/locker v1.0.1 h1:fOXqR41zeveg4fFODix+1Ch4mj/gT0NE1XJbp/epuBg=
 github.com/moby/spdystream v0.2.0/go.mod h1:f7i0iNDQJ059oMTcWxx8MA/zKFIuD/lY+0GqbN2Wy8c=
 github.com/moby/sys/mountinfo v0.6.2 h1:BzJjoreD5BMFNmD9Rus6gdd1pLuecOFPt8wC+Vygl78=

@@ -95,7 +95,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1be
 		defaults = append(defaults, ts.Params...)
 	}
 	// Apply parameter substitution from the taskrun.
-	ts = resources.ApplyParameters(ts, tr, defaults...)
+	ts = resources.ApplyParameters(ctx, ts, tr, defaults...)
 
 	// Apply context substitution from the taskrun
 	ts = resources.ApplyContexts(ts, taskName, tr)

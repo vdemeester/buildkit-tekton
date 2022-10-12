@@ -49,7 +49,6 @@ func (dc *basicGitConfig) String() string {
 	return strings.Join(urls, ",")
 }
 
-// Set sets a secret for a given URL from a "secret=url" value.
 func (dc *basicGitConfig) Set(value string) error {
 	parts := strings.Split(value, "=")
 	if len(parts) != 2 {
@@ -111,14 +110,7 @@ type basicEntry struct {
 }
 
 func (be *basicEntry) configBlurb(u string) string {
-	return fmt.Sprintf("[credential %q]\n	username = %s\n", u, be.escapedUsername())
-}
-
-func (be *basicEntry) escapedUsername() string {
-	if strings.Contains(be.username, "\\") {
-		return strings.ReplaceAll(be.username, "\\", "\\\\")
-	}
-	return be.username
+	return fmt.Sprintf("[credential %q]\n	username = %s\n", u, be.username)
 }
 
 func newBasicEntry(u, secret string) (*basicEntry, error) {

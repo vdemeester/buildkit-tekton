@@ -25,8 +25,7 @@ import (
 	"knative.dev/pkg/apis"
 )
 
-// Validate implements apis.Validatable
-func (tr *TaskResources) Validate(context.Context) (errs *apis.FieldError) {
+func (tr *TaskResources) Validate(ctx context.Context) (errs *apis.FieldError) {
 	if tr != nil {
 		errs = errs.Also(validateTaskResources(tr.Inputs).ViaField("inputs"))
 		errs = errs.Also(validateTaskResources(tr.Outputs).ViaField("outputs"))
@@ -58,10 +57,9 @@ func validateResourceType(r TaskResource, path string) *apis.FieldError {
 			return nil
 		}
 	}
-	return apis.ErrInvalidValue(r.Type, path)
+	return apis.ErrInvalidValue(string(r.Type), path)
 }
 
-// Validate implements apis.Validatable
 func (tr *TaskRunResources) Validate(ctx context.Context) *apis.FieldError {
 	if tr == nil {
 		return nil

@@ -24,29 +24,37 @@ import (
 
 var _ apis.Defaultable = (*Pipeline)(nil)
 
-// SetDefaults sets default values on the Pipeline's Spec
 func (p *Pipeline) SetDefaults(ctx context.Context) {
 	p.Spec.SetDefaults(ctx)
 }
 
-// SetDefaults sets default values for the PipelineSpec's Params, Tasks, and Finally
 func (ps *PipelineSpec) SetDefaults(ctx context.Context) {
 	for i := range ps.Params {
 		ps.Params[i].SetDefaults(ctx)
 	}
-
-	for _, pt := range ps.Tasks {
+	if GetImplicitParamsEnabled(ctx) {
+		ctx = AddContextParamSpec(ctx, ps.Params)
+		ps.Params = GetContextParamSpecs(ctx)
+	}
+	for i, pt := range ps.Tasks {
+		ctx := ctx // Ensure local scoping per Task
 		if pt.TaskRef != nil {
 			if pt.TaskRef.Kind == "" {
 				pt.TaskRef.Kind = NamespacedTaskKind
 			}
 		}
 		if pt.TaskSpec != nil {
+			// Only propagate param context to the spec - ref params should
+			// still be explicitly set.
+			if GetImplicitParamsEnabled(ctx) {
+				ctx = AddContextParams(ctx, pt.Params)
+				ps.Tasks[i].Params = GetContextParams(ctx, pt.Params...)
+			}
 			pt.TaskSpec.SetDefaults(ctx)
 		}
 	}
 
-	for _, ft := range ps.Finally {
+	for i, ft := range ps.Finally {
 		ctx := ctx // Ensure local scoping per Task
 		if ft.TaskRef != nil {
 			if ft.TaskRef.Kind == "" {
@@ -54,6 +62,10 @@ func (ps *PipelineSpec) SetDefaults(ctx context.Context) {
 			}
 		}
 		if ft.TaskSpec != nil {
+			if GetImplicitParamsEnabled(ctx) {
+				ctx = AddContextParams(ctx, ft.Params)
+				ps.Finally[i].Params = GetContextParams(ctx, ft.Params...)
+			}
 			ft.TaskSpec.SetDefaults(ctx)
 		}
 	}

@@ -26,7 +26,6 @@ import (
 type PipelineResourceType = string
 
 var (
-	// AllowedOutputResources are the resource types that can be used as outputs
 	AllowedOutputResources = map[PipelineResourceType]bool{
 		PipelineResourceTypeStorage: true,
 		PipelineResourceTypeGit:     true,
@@ -95,11 +94,9 @@ type PipelineResourceSpec struct {
 	// +optional
 	Description string               `json:"description,omitempty"`
 	Type        PipelineResourceType `json:"type"`
-	// +listType=atomic
-	Params []ResourceParam `json:"params"`
+	Params      []ResourceParam      `json:"params"`
 	// Secrets to fetch to populate some of resource fields
 	// +optional
-	// +listType=atomic
 	SecretParams []SecretParam `json:"secrets,omitempty"`
 }
 

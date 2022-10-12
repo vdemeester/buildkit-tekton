@@ -19,23 +19,19 @@ package pod
 import (
 	"context"
 	"fmt"
-	"log"
-	"math"
 	"path/filepath"
-	"strconv"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
-	"github.com/tektoncd/pipeline/pkg/internal/computeresources/tasklevel"
 	"github.com/tektoncd/pipeline/pkg/names"
+	"github.com/tektoncd/pipeline/pkg/workspace"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/changeset"
-	"knative.dev/pkg/kmeta"
 )
 
 const (
@@ -75,7 +71,6 @@ var (
 	}, {
 		Name:      "tekton-internal-steps",
 		MountPath: pipeline.StepsDir,
-		ReadOnly:  true,
 	}}
 	implicitVolumes = []corev1.Volume{{
 		Name:         "tekton-internal-workspace",
@@ -90,9 +85,6 @@ var (
 		Name:         "tekton-internal-steps",
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}}
-
-	// MaxActiveDeadlineSeconds is a maximum permitted value to be used for a task with no timeout
-	MaxActiveDeadlineSeconds = int64(math.MaxInt32)
 )
 
 // Builder exposes options to configure Pod construction from TaskSpecs/Runs.
@@ -100,6 +92,7 @@ type Builder struct {
 	Images          pipeline.Images
 	KubeClient      kubernetes.Interface
 	EntrypointCache EntrypointCache
+	OverrideHomeEnv bool
 }
 
 // Transformer is a function that will transform a Pod. This can be used to mutate
@@ -112,17 +105,24 @@ type Transformer func(*corev1.Pod) (*corev1.Pod, error)
 func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec v1beta1.TaskSpec, transformers ...Transformer) (*corev1.Pod, error) {
 	var (
 		scriptsInit                                       *corev1.Container
+		entrypointInit                                    corev1.Container
 		initContainers, stepContainers, sidecarContainers []corev1.Container
 		volumes                                           []corev1.Volume
+		volumeMounts                                      []corev1.VolumeMount
 	)
-	volumeMounts := []corev1.VolumeMount{binROMount}
 	implicitEnvVars := []corev1.EnvVar{}
-	featureFlags := config.FromContextOrDefaults(ctx).FeatureFlags
-	alphaAPIEnabled := featureFlags.EnableAPIFields == config.AlphaAPIFields
+	alphaAPIEnabled := config.FromContextOrDefaults(ctx).FeatureFlags.EnableAPIFields == config.AlphaAPIFields
 
 	// Add our implicit volumes first, so they can be overridden by the user if they prefer.
 	volumes = append(volumes, implicitVolumes...)
 	volumeMounts = append(volumeMounts, implicitVolumeMounts...)
+
+	if b.OverrideHomeEnv {
+		implicitEnvVars = append(implicitEnvVars, corev1.EnvVar{
+			Name:  "HOME",
+			Value: pipeline.HomeDir,
+		})
+	}
 
 	// Create Volumes and VolumeMounts for any credentials found in annotated
 	// Secrets, along with any arguments needed by Step entrypoints to process
@@ -140,69 +140,49 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	if err != nil {
 		return nil, err
 	}
-	steps, err = v1beta1.MergeStepsWithOverrides(steps, taskRun.Spec.StepOverrides)
-	if err != nil {
-		return nil, err
-	}
-	if alphaAPIEnabled && taskRun.Spec.ComputeResources != nil {
-		tasklevel.ApplyTaskLevelComputeResources(steps, taskRun.Spec.ComputeResources)
-	}
-	sidecars, err := v1beta1.MergeSidecarsWithOverrides(taskSpec.Sidecars, taskRun.Spec.SidecarOverrides)
-	if err != nil {
-		return nil, err
-	}
-
-	initContainers = []corev1.Container{
-		entrypointInitContainer(b.Images.EntrypointImage, steps),
-	}
 
 	// Convert any steps with Script to command+args.
 	// If any are found, append an init container to initialize scripts.
 	if alphaAPIEnabled {
-		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, b.Images.ShellImageWin, steps, sidecars, taskRun.Spec.Debug)
+		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, b.Images.ShellImageWin, steps, taskSpec.Sidecars, taskRun.Spec.Debug)
 	} else {
-		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, "", steps, sidecars, nil)
+		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, "", steps, taskSpec.Sidecars, nil)
 	}
-
 	if scriptsInit != nil {
 		initContainers = append(initContainers, *scriptsInit)
 		volumes = append(volumes, scriptsVolume)
 	}
+
 	if alphaAPIEnabled && taskRun.Spec.Debug != nil {
 		volumes = append(volumes, debugScriptsVolume, debugInfoVolume)
 	}
+
 	// Initialize any workingDirs under /workspace.
-	if workingDirInit := workingDirInit(b.Images.WorkingDirInitImage, stepContainers); workingDirInit != nil {
+	if workingDirInit := workingDirInit(b.Images.ShellImage, stepContainers); workingDirInit != nil {
 		initContainers = append(initContainers, *workingDirInit)
 	}
 
-	// By default, use an empty pod template and take the one defined in the task run spec if any
-	podTemplate := pod.Template{}
-
-	if taskRun.Spec.PodTemplate != nil {
-		podTemplate = *taskRun.Spec.PodTemplate
-	}
-
 	// Resolve entrypoint for any steps that don't specify command.
-	stepContainers, err = resolveEntrypoints(ctx, b.EntrypointCache, taskRun.Namespace, taskRun.Spec.ServiceAccountName, podTemplate.ImagePullSecrets, stepContainers)
+	stepContainers, err = resolveEntrypoints(ctx, b.EntrypointCache, taskRun.Namespace, taskRun.Spec.ServiceAccountName, stepContainers)
 	if err != nil {
 		return nil, err
 	}
 
-	readyImmediately := isPodReadyImmediately(*featureFlags, taskSpec.Sidecars)
-
+	// Rewrite steps with entrypoint binary. Append the entrypoint init
+	// container to place the entrypoint binary. Also add timeout flags
+	// to entrypoint binary.
 	if alphaAPIEnabled {
-		stepContainers, err = orderContainers(credEntrypointArgs, stepContainers, &taskSpec, taskRun.Spec.Debug, !readyImmediately)
+		entrypointInit, stepContainers, err = orderContainers(b.Images.EntrypointImage, credEntrypointArgs, stepContainers, &taskSpec, taskRun.Spec.Debug)
 	} else {
-		stepContainers, err = orderContainers(credEntrypointArgs, stepContainers, &taskSpec, nil, !readyImmediately)
+		entrypointInit, stepContainers, err = orderContainers(b.Images.EntrypointImage, credEntrypointArgs, stepContainers, &taskSpec, nil)
 	}
 	if err != nil {
 		return nil, err
 	}
-	volumes = append(volumes, binVolume)
-	if !readyImmediately {
-		volumes = append(volumes, downwardVolume)
-	}
+	// place the entrypoint first in case other init containers rely on its
+	// features (e.g. decode-script).
+	initContainers = append([]corev1.Container{entrypointInit}, initContainers...)
+	volumes = append(volumes, toolsVolume, downwardVolume)
 
 	// Add implicit env vars.
 	// They're prepended to the list, so that if the user specified any
@@ -237,14 +217,6 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 			s.VolumeMounts = append(s.VolumeMounts, *vm)
 		}
 
-		// Add /tekton/run state volumes.
-		// Each step should only mount their own volume as RW,
-		// all other steps should be mounted RO.
-		volumes = append(volumes, runVolume(i))
-		for j := 0; j < len(stepContainers); j++ {
-			s.VolumeMounts = append(s.VolumeMounts, runMount(j, i != j))
-		}
-
 		requestedVolumeMounts := map[string]bool{}
 		for _, vm := range s.VolumeMounts {
 			requestedVolumeMounts[filepath.Clean(vm.MountPath)] = true
@@ -260,11 +232,23 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 
 	// This loop:
+	// - defaults workingDir to /workspace
 	// - sets container name to add "step-" prefix or "step-unnamed-#" if not specified.
 	// TODO(#1605): Remove this loop and make each transformation in
 	// isolation.
+	shouldOverrideWorkingDir := shouldOverrideWorkingDir(ctx)
 	for i, s := range stepContainers {
+		if s.WorkingDir == "" && shouldOverrideWorkingDir {
+			stepContainers[i].WorkingDir = pipeline.WorkspaceDir
+		}
 		stepContainers[i].Name = names.SimpleNameGenerator.RestrictLength(StepName(s.Name, i))
+	}
+
+	// By default, use an empty pod template and take the one defined in the task run spec if any
+	podTemplate := pod.Template{}
+
+	if taskRun.Spec.PodTemplate != nil {
+		podTemplate = *taskRun.Spec.PodTemplate
 	}
 
 	// Add podTemplate Volumes to the explicitly declared use volumes
@@ -273,6 +257,17 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 
 	if err := v1beta1.ValidateVolumes(volumes); err != nil {
 		return nil, err
+	}
+
+	// Using node affinity on taskRuns sharing PVC workspace, with an Affinity Assistant
+	// is mutually exclusive with other affinity on taskRun pods. If other
+	// affinity is wanted, that should be added on the Affinity Assistant pod unless
+	// assistant is disabled. When Affinity Assistant is disabled, an affinityAssistantName is not set.
+	var affinity *corev1.Affinity
+	if affinityAssistantName := taskRun.Annotations[workspace.AnnotationAffinityAssistantName]; affinityAssistantName != "" {
+		affinity = nodeAffinityUsingAffinityAssistant(affinityAssistantName)
+	} else {
+		affinity = podTemplate.Affinity
 	}
 
 	mergedPodContainers := stepContainers
@@ -293,33 +288,28 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 		priorityClassName = *podTemplate.PriorityClassName
 	}
 
-	podAnnotations := kmeta.CopyMap(taskRun.Annotations)
-	podAnnotations[ReleaseAnnotation] = changeset.Get()
+	podAnnotations := taskRun.Annotations
+	version, err := changeset.Get()
+	if err != nil {
+		return nil, err
+	}
+	podAnnotations[ReleaseAnnotation] = version
 
-	if readyImmediately {
+	if shouldAddReadyAnnotationOnPodCreate(ctx, taskSpec.Sidecars) {
 		podAnnotations[readyAnnotation] = readyAnnotationValue
 	}
-
-	// calculate the activeDeadlineSeconds based on the specified timeout (uses default timeout if it's not specified)
 	activeDeadlineSeconds := int64(taskRun.GetTimeout(ctx).Seconds() * deadlineFactor)
-	// set activeDeadlineSeconds to the max. allowed value i.e. max int32 when timeout is explicitly set to 0
-	if taskRun.GetTimeout(ctx) == config.NoTimeoutDuration {
-		activeDeadlineSeconds = MaxActiveDeadlineSeconds
-	}
 
-	podNameSuffix := "-pod"
-	if taskRunRetries := len(taskRun.Status.RetriesStatus); taskRunRetries > 0 {
-		podNameSuffix = fmt.Sprintf("%s-retry%d", podNameSuffix, taskRunRetries)
-	}
-	newPod := &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			// We execute the build's pod in the same namespace as where the build was
 			// created so that it can access colocated resources.
 			Namespace: taskRun.Namespace,
 			// Generate a unique name based on the build's name.
-			// The name is univocally generated so that in case of
-			// stale informer cache, we never create duplicate Pods
-			Name: kmeta.ChildName(taskRun.Name, podNameSuffix),
+			// Add a unique suffix to avoid confusion when a build
+			// is deleted and re-created with the same name.
+			// We don't use RestrictLengthWithRandomSuffix here because k8s fakes don't support it.
+			Name: names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("%s-pod", taskRun.Name)),
 			// If our parent TaskRun is deleted, then we should be as well.
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(taskRun, groupVersionKind),
@@ -335,7 +325,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 			Volumes:                      volumes,
 			NodeSelector:                 podTemplate.NodeSelector,
 			Tolerations:                  podTemplate.Tolerations,
-			Affinity:                     podTemplate.Affinity,
+			Affinity:                     affinity,
 			SecurityContext:              podTemplate.SecurityContext,
 			RuntimeClassName:             podTemplate.RuntimeClassName,
 			AutomountServiceAccountToken: podTemplate.AutomountServiceAccountToken,
@@ -347,19 +337,18 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 			PriorityClassName:            priorityClassName,
 			ImagePullSecrets:             podTemplate.ImagePullSecrets,
 			HostAliases:                  podTemplate.HostAliases,
-			TopologySpreadConstraints:    podTemplate.TopologySpreadConstraints,
 			ActiveDeadlineSeconds:        &activeDeadlineSeconds, // Set ActiveDeadlineSeconds to mark the pod as "terminating" (like a Job)
 		},
 	}
 
 	for _, f := range transformers {
-		newPod, err = f(newPod)
+		pod, err = f(pod)
 		if err != nil {
-			return newPod, err
+			return pod, err
 		}
 	}
 
-	return newPod, nil
+	return pod, nil
 }
 
 // makeLabels constructs the labels we will propagate from TaskRuns to Pods.
@@ -379,59 +368,58 @@ func makeLabels(s *v1beta1.TaskRun) map[string]string {
 	return labels
 }
 
-// isPodReadyImmediately returns a bool indicating whether the
-// controller should consider the Pod "Ready" as soon as it's deployed.
-// This will add the `Ready` annotation when creating the Pod,
-// and prevent the first step from waiting for the annotation to appear before starting.
-func isPodReadyImmediately(featureFlags config.FeatureFlags, sidecars []v1beta1.Sidecar) bool {
-	// If the TaskRun has sidecars, we must wait for them
-	if len(sidecars) > 0 || featureFlags.RunningInEnvWithInjectedSidecars {
-		if featureFlags.AwaitSidecarReadiness {
-			return false
-		}
-		log.Printf("warning: not waiting for sidecars before starting first Step of Task pod")
-	}
-	return true
-}
-
-func runMount(i int, ro bool) corev1.VolumeMount {
-	return corev1.VolumeMount{
-		Name:      fmt.Sprintf("%s-%d", runVolumeName, i),
-		MountPath: filepath.Join(runDir, strconv.Itoa(i)),
-		ReadOnly:  ro,
+// nodeAffinityUsingAffinityAssistant achieves Node Affinity for taskRun pods
+// sharing PVC workspace by setting PodAffinity so that taskRuns is
+// scheduled to the Node were the Affinity Assistant pod is scheduled.
+func nodeAffinityUsingAffinityAssistant(affinityAssistantName string) *corev1.Affinity {
+	return &corev1.Affinity{
+		PodAffinity: &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						workspace.LabelInstance:  affinityAssistantName,
+						workspace.LabelComponent: workspace.ComponentNameAffinityAssistant,
+					},
+				},
+				TopologyKey: "kubernetes.io/hostname",
+			}},
+		},
 	}
 }
 
-func runVolume(i int) corev1.Volume {
-	return corev1.Volume{
-		Name:         fmt.Sprintf("%s-%d", runVolumeName, i),
-		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-	}
+// ShouldOverrideHomeEnv returns a bool indicating whether a Pod should have its
+// $HOME environment variable overwritten with /tekton/home or if it should be
+// left unmodified. The default behaviour is to overwrite the $HOME variable
+// but this is planned to change in an upcoming release.
+//
+// For further reference see https://github.com/tektoncd/pipeline/issues/2013
+func ShouldOverrideHomeEnv(ctx context.Context) bool {
+	cfg := config.FromContextOrDefaults(ctx)
+	return !cfg.FeatureFlags.DisableHomeEnvOverwrite
 }
 
-// entrypointInitContainer generates a few init containers based of a set of command (in images) and volumes to run
-// This should effectively merge multiple command and volumes together.
-func entrypointInitContainer(image string, steps []v1beta1.Step) corev1.Container {
-	// Invoke the entrypoint binary in "cp mode" to copy itself
-	// into the correct location for later steps and initialize steps folder
-	command := []string{"/ko-app/entrypoint", "init", "/ko-app/entrypoint", entrypointBinary}
-	for i, s := range steps {
-		command = append(command, StepName(s.Name, i))
-	}
-	volumeMounts := []corev1.VolumeMount{binMount, internalStepsMount}
+// shouldOverrideWorkingDir returns a bool indicating whether a Pod should have its
+// working directory overwritten with /workspace or if it should be
+// left unmodified. The default behaviour is to overwrite the working directory with '/workspace'
+// if not specified by the user,  but this is planned to change in an upcoming release.
+//
+// For further reference see https://github.com/tektoncd/pipeline/issues/1836
+func shouldOverrideWorkingDir(ctx context.Context) bool {
+	cfg := config.FromContextOrDefaults(ctx)
+	return !cfg.FeatureFlags.DisableWorkingDirOverwrite
+}
 
-	// Rewrite steps with entrypoint binary. Append the entrypoint init
-	// container to place the entrypoint binary. Also add timeout flags
-	// to entrypoint binary.
-	prepareInitContainer := corev1.Container{
-		Name:  "prepare",
-		Image: image,
-		// Rewrite default WorkingDir from "/home/nonroot" to "/"
-		// as suggested at https://github.com/GoogleContainerTools/distroless/issues/718
-		// to avoid permission errors with nonroot users not equal to `65532`
-		WorkingDir:   "/",
-		Command:      command,
-		VolumeMounts: volumeMounts,
+// shouldAddReadyAnnotationonPodCreate returns a bool indicating whether the
+// controller should add the `Ready` annotation when creating the Pod. We cannot
+// add the annotation if Tekton is running in a cluster with injected sidecars
+// or if the Task specifies any sidecars.
+func shouldAddReadyAnnotationOnPodCreate(ctx context.Context, sidecars []v1beta1.Sidecar) bool {
+	// If the TaskRun has sidecars, we cannot set the READY annotation early
+	if len(sidecars) > 0 {
+		return false
 	}
-	return prepareInitContainer
+	// If the TaskRun has no sidecars, check if we are running in a cluster where sidecars can be injected by other
+	// controllers.
+	cfg := config.FromContextOrDefaults(ctx)
+	return !cfg.FeatureFlags.RunningInEnvWithInjectedSidecars
 }

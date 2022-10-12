@@ -24,11 +24,9 @@ import (
 
 var _ apis.Defaultable = (*PipelineResource)(nil)
 
-// SetDefaults implements api.Defaultable
 func (t *PipelineResource) SetDefaults(ctx context.Context) {
 	t.Spec.SetDefaults(ctx)
 }
 
-// SetDefaults implements api.Defaultable
 func (ts *PipelineResourceSpec) SetDefaults(ctx context.Context) {
 }

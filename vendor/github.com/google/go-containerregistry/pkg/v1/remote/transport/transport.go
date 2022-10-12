@@ -68,8 +68,10 @@ func NewWithContext(ctx context.Context, reg name.Registry, auth authn.Authentic
 	}
 
 	switch pr.challenge.Canonical() {
-	case anonymous, basic:
-		return &Wrapper{&basicTransport{inner: t, auth: auth, target: reg.RegistryStr()}}, nil
+	case anonymous:
+		return t, nil
+	case basic:
+		return &basicTransport{inner: t, auth: auth, target: reg.RegistryStr()}, nil
 	case bearer:
 		// We require the realm, which tells us where to send our Basic auth to turn it into Bearer auth.
 		realm, ok := pr.parameters["realm"]
@@ -94,19 +96,8 @@ func NewWithContext(ctx context.Context, reg name.Registry, auth authn.Authentic
 		if err := bt.refresh(ctx); err != nil {
 			return nil, err
 		}
-		return &Wrapper{bt}, nil
+		return bt, nil
 	default:
 		return nil, fmt.Errorf("unrecognized challenge: %s", pr.challenge)
 	}
-}
-
-// Wrapper results in *not* wrapping supplied transport with additional logic such as retries, useragent and debug logging
-// Consumers are opt-ing into providing their own transport without any additional wrapping.
-type Wrapper struct {
-	inner http.RoundTripper
-}
-
-// RoundTrip delegates to the inner RoundTripper
-func (w *Wrapper) RoundTrip(in *http.Request) (*http.Response, error) {
-	return w.inner.RoundTrip(in)
 }

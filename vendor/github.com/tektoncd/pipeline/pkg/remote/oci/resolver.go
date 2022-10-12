@@ -35,14 +35,10 @@ import (
 )
 
 const (
-	// KindAnnotation is an OCI annotation for the bundle kind
-	KindAnnotation = "dev.tekton.image.kind"
-	// APIVersionAnnotation is an OCI annotation for the bundle version
+	KindAnnotation       = "dev.tekton.image.kind"
 	APIVersionAnnotation = "dev.tekton.image.apiVersion"
-	// TitleAnnotation is an OCI annotation for the bundle title
-	TitleAnnotation = "dev.tekton.image.name"
-	// MaximumBundleObjects defines the maximum number of objects in a bundle
-	MaximumBundleObjects = 20
+	TitleAnnotation      = "dev.tekton.image.name"
+	MaximumBundleObjects = 10
 )
 
 // Resolver implements the Resolver interface using OCI images.
@@ -58,9 +54,8 @@ func NewResolver(ref string, keychain authn.Keychain) remote.Resolver {
 	return &Resolver{imageReference: ref, keychain: keychain, timeout: time.Second * 60}
 }
 
-// List retrieves a flat set of Tekton objects
-func (o *Resolver) List(ctx context.Context) ([]remote.ResolvedObject, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, o.timeout)
+func (o *Resolver) List() ([]remote.ResolvedObject, error) {
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), o.timeout)
 	defer cancel()
 	img, err := o.retrieveImage(timeoutCtx)
 	if err != nil {
@@ -88,9 +83,8 @@ func (o *Resolver) List(ctx context.Context) ([]remote.ResolvedObject, error) {
 	return contents, nil
 }
 
-// Get retrieves a specific object with the given Kind and name
-func (o *Resolver) Get(ctx context.Context, kind, name string) (runtime.Object, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, o.timeout)
+func (o *Resolver) Get(kind, name string) (runtime.Object, error) {
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), o.timeout)
 	defer cancel()
 	img, err := o.retrieveImage(timeoutCtx)
 	if err != nil {

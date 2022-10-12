@@ -28,104 +28,53 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
-	"github.com/tektoncd/pipeline/pkg/container"
 	"github.com/tektoncd/pipeline/pkg/pod"
 	"github.com/tektoncd/pipeline/pkg/substitution"
 )
 
-const (
-	// objectIndividualVariablePattern is the reference pattern for object individual keys params.<object_param_name>.<key_name>
-	objectIndividualVariablePattern = "params.%s.%s"
-)
-
-var (
-	paramPatterns = []string{
-		"params.%s",
-		"params[%q]",
-		"params['%s']",
-		// FIXME(vdemeester) Remove that with deprecating v1beta1
-		"inputs.params.%s",
-	}
-)
-
 // ApplyParameters applies the params from a TaskRun.Input.Parameters to a TaskSpec
-func ApplyParameters(ctx context.Context, spec *v1beta1.TaskSpec, tr *v1beta1.TaskRun, defaults ...v1beta1.ParamSpec) *v1beta1.TaskSpec {
+func ApplyParameters(spec *v1beta1.TaskSpec, tr *v1beta1.TaskRun, defaults ...v1beta1.ParamSpec) *v1beta1.TaskSpec {
 	// This assumes that the TaskRun inputs have been validated against what the Task requests.
 
 	// stringReplacements is used for standard single-string stringReplacements, while arrayReplacements contains arrays
 	// that need to be further processed.
 	stringReplacements := map[string]string{}
 	arrayReplacements := map[string][]string{}
-	cfg := config.FromContextOrDefaults(ctx)
+
+	patterns := []string{
+		"params.%s",
+		"params[%q]",
+		// FIXME(vdemeester) Remove that with deprecating v1beta1
+		"inputs.params.%s",
+	}
 
 	// Set all the default stringReplacements
 	for _, p := range defaults {
 		if p.Default != nil {
-			switch p.Default.Type {
-			case v1beta1.ParamTypeArray:
-				for _, pattern := range paramPatterns {
-					// array indexing for param is alpha feature
-					if cfg.FeatureFlags.EnableAPIFields == config.AlphaAPIFields {
-						for i := 0; i < len(p.Default.ArrayVal); i++ {
-							stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Default.ArrayVal[i]
-						}
-					}
-					arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Default.ArrayVal
-				}
-			case v1beta1.ParamTypeObject:
-				for k, v := range p.Default.ObjectVal {
-					stringReplacements[fmt.Sprintf(objectIndividualVariablePattern, p.Name, k)] = v
-				}
-			default:
-				for _, pattern := range paramPatterns {
+			if p.Default.Type == v1beta1.ParamTypeString {
+				for _, pattern := range patterns {
 					stringReplacements[fmt.Sprintf(pattern, p.Name)] = p.Default.StringVal
+				}
+			} else {
+				for _, pattern := range patterns {
+					arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Default.ArrayVal
 				}
 			}
 		}
 	}
 	// Set and overwrite params with the ones from the TaskRun
-	trStrings, trArrays := paramsFromTaskRun(ctx, tr)
-	for k, v := range trStrings {
-		stringReplacements[k] = v
-	}
-	for k, v := range trArrays {
-		arrayReplacements[k] = v
-	}
-
-	return ApplyReplacements(spec, stringReplacements, arrayReplacements)
-}
-
-func paramsFromTaskRun(ctx context.Context, tr *v1beta1.TaskRun) (map[string]string, map[string][]string) {
-	// stringReplacements is used for standard single-string stringReplacements, while arrayReplacements contains arrays
-	// that need to be further processed.
-	stringReplacements := map[string]string{}
-	arrayReplacements := map[string][]string{}
-	cfg := config.FromContextOrDefaults(ctx)
-
 	for _, p := range tr.Spec.Params {
-		switch p.Value.Type {
-		case v1beta1.ParamTypeArray:
-			for _, pattern := range paramPatterns {
-				// array indexing for param is alpha feature
-				if cfg.FeatureFlags.EnableAPIFields == config.AlphaAPIFields {
-					for i := 0; i < len(p.Value.ArrayVal); i++ {
-						stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Value.ArrayVal[i]
-					}
-				}
-				arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Value.ArrayVal
-			}
-		case v1beta1.ParamTypeObject:
-			for k, v := range p.Value.ObjectVal {
-				stringReplacements[fmt.Sprintf(objectIndividualVariablePattern, p.Name, k)] = v
-			}
-		default:
-			for _, pattern := range paramPatterns {
+		if p.Value.Type == v1beta1.ParamTypeString {
+			for _, pattern := range patterns {
 				stringReplacements[fmt.Sprintf(pattern, p.Name)] = p.Value.StringVal
+			}
+		} else {
+			for _, pattern := range patterns {
+				arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Value.ArrayVal
 			}
 		}
 	}
-
-	return stringReplacements, arrayReplacements
+	return ApplyReplacements(spec, stringReplacements, arrayReplacements)
 }
 
 // ApplyResources applies the substitution from values in resources which are referenced in spec as subitems
@@ -159,20 +108,17 @@ func ApplyResources(spec *v1beta1.TaskSpec, resolvedResources map[string]v1beta1
 	return ApplyReplacements(spec, replacements, map[string][]string{})
 }
 
-func getContextReplacements(taskName string, tr *v1beta1.TaskRun) map[string]string {
-	return map[string]string{
+// ApplyContexts applies the substitution from $(context.(taskRun|task).*) with the specified values.
+// Uses "" as a default if a value is not available.
+func ApplyContexts(spec *v1beta1.TaskSpec, rtr *ResolvedTaskResources, tr *v1beta1.TaskRun) *v1beta1.TaskSpec {
+	replacements := map[string]string{
 		"context.taskRun.name":      tr.Name,
-		"context.task.name":         taskName,
+		"context.task.name":         rtr.TaskName,
 		"context.taskRun.namespace": tr.Namespace,
 		"context.taskRun.uid":       string(tr.ObjectMeta.UID),
 		"context.task.retry-count":  strconv.Itoa(len(tr.Status.RetriesStatus)),
 	}
-}
-
-// ApplyContexts applies the substitution from $(context.(taskRun|task).*) with the specified values.
-// Uses "" as a default if a value is not available.
-func ApplyContexts(spec *v1beta1.TaskSpec, taskName string, tr *v1beta1.TaskRun) *v1beta1.TaskSpec {
-	return ApplyReplacements(spec, getContextReplacements(taskName, tr), map[string][]string{})
+	return ApplyReplacements(spec, replacements, map[string][]string{})
 }
 
 // ApplyWorkspaces applies the substitution from paths that the workspaces in declarations mounted to, the
@@ -229,7 +175,7 @@ func applyWorkspaceMountPath(variable string, spec *v1beta1.TaskSpec, declaratio
 		for _, usage := range step.Workspaces {
 			if usage.Name == declaration.Name && usage.MountPath != "" {
 				stringReplacements[variable] = usage.MountPath
-				container.ApplyStepReplacements(step, stringReplacements, emptyArrayReplacements)
+				v1beta1.ApplyStepReplacements(step, stringReplacements, emptyArrayReplacements)
 			}
 		}
 	}
@@ -239,7 +185,7 @@ func applyWorkspaceMountPath(variable string, spec *v1beta1.TaskSpec, declaratio
 		for _, usage := range sidecar.Workspaces {
 			if usage.Name == declaration.Name && usage.MountPath != "" {
 				stringReplacements[variable] = usage.MountPath
-				container.ApplySidecarReplacements(sidecar, stringReplacements, emptyArrayReplacements)
+				v1beta1.ApplySidecarReplacements(sidecar, stringReplacements, emptyArrayReplacements)
 			}
 		}
 	}
@@ -257,7 +203,6 @@ func ApplyTaskResults(spec *v1beta1.TaskSpec) *v1beta1.TaskSpec {
 	patterns := []string{
 		"results.%s.path",
 		"results[%q].path",
-		"results['%s'].path",
 	}
 
 	for _, result := range spec.Results {
@@ -296,12 +241,12 @@ func ApplyReplacements(spec *v1beta1.TaskSpec, stringReplacements map[string]str
 	// Apply variable expansion to steps fields.
 	steps := spec.Steps
 	for i := range steps {
-		container.ApplyStepReplacements(&steps[i], stringReplacements, arrayReplacements)
+		v1beta1.ApplyStepReplacements(&steps[i], stringReplacements, arrayReplacements)
 	}
 
 	// Apply variable expansion to stepTemplate fields.
 	if spec.StepTemplate != nil {
-		container.ApplyStepTemplateReplacements(spec.StepTemplate, stringReplacements, arrayReplacements)
+		v1beta1.ApplyStepReplacements(&v1beta1.Step{Container: *spec.StepTemplate}, stringReplacements, arrayReplacements)
 	}
 
 	// Apply variable expansion to the build's volumes
@@ -356,7 +301,7 @@ func ApplyReplacements(spec *v1beta1.TaskSpec, stringReplacements map[string]str
 	// Apply variable substitution to the sidecar definitions
 	sidecars := spec.Sidecars
 	for i := range sidecars {
-		container.ApplySidecarReplacements(&sidecars[i], stringReplacements, arrayReplacements)
+		v1beta1.ApplySidecarReplacements(&sidecars[i], stringReplacements, arrayReplacements)
 	}
 
 	return spec

@@ -17,7 +17,6 @@ package transport
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -140,8 +139,7 @@ func (bt *bearerTransport) refresh(ctx context.Context) error {
 		// the Username should be set to <token>, which indicates
 		// we are using an oauth flow.
 		content, err = bt.refreshOauth(ctx)
-		var terr *Error
-		if errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound {
+		if terr, ok := err.(*Error); ok && terr.StatusCode == http.StatusNotFound {
 			// Note: Not all token servers implement oauth2.
 			// If the request to the endpoint returns 404 using the HTTP POST method,
 			// refer to Token Documentation for using the HTTP GET method supported by all token servers.

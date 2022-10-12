@@ -38,7 +38,9 @@ const (
 
 	// DefaultTaskrunLevel determines to what level to aggregate metrics
 	// when it isn't specified in configmap
-	DefaultTaskrunLevel = TaskrunLevelAtTask
+	// TBD: Change to task in next
+	// relase and taskrun level will be deprecated
+	DefaultTaskrunLevel = "taskrun"
 	// TaskrunLevelAtTaskrun specify that aggregation will be done at
 	// taskrun level
 	TaskrunLevelAtTaskrun = "taskrun"
@@ -48,9 +50,11 @@ const (
 	TaskrunLevelAtNS = "namespace"
 	// DefaultPipelinerunLevel determines to what level to aggregate metrics
 	// when it isn't specified in configmap
-	DefaultPipelinerunLevel = PipelinerunLevelAtPipeline
+	// TBD: Change to pipeline in next
+	// relase and pipelinerun level will be deprecated
+	DefaultPipelinerunLevel = "pipelinerun"
 	// PipelinerunLevelAtPipelinerun specify that aggregation will be done at
-	// pipelinerun level
+	// pipelienrun level
 	PipelinerunLevelAtPipelinerun = "pipelinerun"
 	// PipelinerunLevelAtPipeline specify that aggregation will be done at
 	// pipeline level
@@ -66,7 +70,7 @@ const (
 	// DurationTaskrunTypeHistogram specify that histogram
 	// type metrics need to be use for Duration of Taskrun
 	DurationTaskrunTypeHistogram = "histogram"
-	// DurationTaskrunTypeLastValue specify that lastValue or
+	// DurationTaskrunTypeHistogram specify that lastValue or
 	// gauge type metrics need to be use for Duration of Taskrun
 	DurationTaskrunTypeLastValue = "lastvalue"
 
@@ -77,7 +81,7 @@ const (
 	// DurationPipelinerunTypeHistogram specify that histogram
 	// type metrics need to be use for Duration of Pipelinerun
 	DurationPipelinerunTypeHistogram = "histogram"
-	// DurationPipelinerunTypeLastValue specify that lastValue or
+	// DurationPipelinerunTypeHistogram specify that lastValue or
 	// gauge type metrics need to be use for Duration of Pipelinerun
 	DurationPipelinerunTypeLastValue = "lastvalue"
 )
@@ -91,7 +95,7 @@ type Metrics struct {
 	DurationPipelinerunType string
 }
 
-// GetMetricsConfigName returns the name of the configmap containing all
+// GetArtifactBucketConfigName returns the name of the configmap containing all
 // customizations for the storage bucket.
 func GetMetricsConfigName() string {
 	return metrics.ConfigMapName()
@@ -113,8 +117,8 @@ func (cfg *Metrics) Equals(other *Metrics) bool {
 		other.DurationPipelinerunType == cfg.DurationPipelinerunType
 }
 
-// newMetricsFromMap returns a Config given a map corresponding to a ConfigMap
-func newMetricsFromMap(cfgMap map[string]string) (*Metrics, error) {
+// NewMetricsFromMap returns a Config given a map corresponding to a ConfigMap
+func NewMetricsFromMap(cfgMap map[string]string) (*Metrics, error) {
 	tc := Metrics{
 		TaskrunLevel:            DefaultTaskrunLevel,
 		PipelinerunLevel:        DefaultPipelinerunLevel,
@@ -132,13 +136,13 @@ func newMetricsFromMap(cfgMap map[string]string) (*Metrics, error) {
 	if durationTaskrun, ok := cfgMap[metricsDurationTaskrunType]; ok {
 		tc.DurationTaskrunType = durationTaskrun
 	}
-	if durationPipelinerun, ok := cfgMap[metricsDurationPipelinerunType]; ok {
-		tc.DurationPipelinerunType = durationPipelinerun
+	if durationPipelienrun, ok := cfgMap[metricsDurationPipelinerunType]; ok {
+		tc.DurationPipelinerunType = durationPipelienrun
 	}
 	return &tc, nil
 }
 
-// NewMetricsFromConfigMap returns a Config for the given configmap
+// NewArtifactBucketFromConfigMap returns a Config for the given configmap
 func NewMetricsFromConfigMap(config *corev1.ConfigMap) (*Metrics, error) {
-	return newMetricsFromMap(config.Data)
+	return NewMetricsFromMap(config.Data)
 }

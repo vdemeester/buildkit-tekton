@@ -19,5 +19,6 @@ package pipeline
 // Options holds options passed to the Tekton Pipeline controllers
 // typically via command-line flags.
 type Options struct {
-	Images Images
+	Images                        Images
+	ExperimentalDisableResolution bool
 }

@@ -34,7 +34,7 @@ const (
 	debugInfoVolumeName    = "tekton-internal-debug-info"
 	scriptsDir             = "/tekton/scripts"
 	debugScriptsDir        = "/tekton/debug/scripts"
-	defaultScriptPreamble  = "#!/bin/sh\nset -e\n"
+	defaultScriptPreamble  = "#!/bin/sh\nset -xe\n"
 	debugInfoDir           = "/tekton/debug/info"
 )
 
@@ -92,18 +92,17 @@ func convertScripts(shellImageLinux string, shellImageWin string, steps []v1beta
 		Image:        shellImage,
 		Command:      []string{shellCommand},
 		Args:         []string{shellArg, ""},
-		VolumeMounts: []corev1.VolumeMount{writeScriptsVolumeMount, binMount},
+		VolumeMounts: []corev1.VolumeMount{writeScriptsVolumeMount, toolsMount},
 	}
 
 	breakpoints := []string{}
 	sideCarSteps := []v1beta1.Step{}
-	for _, sidecar := range sidecars {
-		c := sidecar.ToK8sContainer()
+	for _, step := range sidecars {
 		sidecarStep := v1beta1.Step{
-			Script:  sidecar.Script,
-			Timeout: &metav1.Duration{},
+			Container: step.Container,
+			Script:    step.Script,
+			Timeout:   &metav1.Duration{},
 		}
-		sidecarStep.SetContainerFields(*c)
 		sideCarSteps = append(sideCarSteps, sidecarStep)
 	}
 
@@ -130,18 +129,9 @@ func convertScripts(shellImageLinux string, shellImageWin string, steps []v1beta
 func convertListOfSteps(steps []v1beta1.Step, initContainer *corev1.Container, placeScripts *bool, breakpoints []string, namePrefix string) []corev1.Container {
 	containers := []corev1.Container{}
 	for i, s := range steps {
-		// Add debug mounts if breakpoints are present
-		if len(breakpoints) > 0 {
-			debugInfoVolumeMount := corev1.VolumeMount{
-				Name:      debugInfoVolumeName,
-				MountPath: filepath.Join(debugInfoDir, fmt.Sprintf("%d", i)),
-			}
-			steps[i].VolumeMounts = append(steps[i].VolumeMounts, debugScriptsVolumeMount, debugInfoVolumeMount)
-		}
-
 		if s.Script == "" {
 			// Nothing to convert.
-			containers = append(containers, *steps[i].ToK8sContainer())
+			containers = append(containers, s.Container)
 			continue
 		}
 
@@ -184,7 +174,7 @@ touch ${scriptfile} && chmod +x ${scriptfile}
 cat > ${scriptfile} << '%s'
 %s
 %s
-/tekton/bin/entrypoint decode-script "${scriptfile}"
+/tekton/tools/entrypoint decode-script "${scriptfile}"
 `, scriptFile, heredoc, script, heredoc)
 
 			// Set the command to execute the correct script in the mounted
@@ -196,25 +186,29 @@ cat > ${scriptfile} << '%s'
 		}
 		steps[i].VolumeMounts = append(steps[i].VolumeMounts, scriptsVolumeMount)
 
-		containers = append(containers, *steps[i].ToK8sContainer())
+		// Add debug mounts if breakpoints are present
+		if len(breakpoints) > 0 {
+			debugInfoVolumeMount := corev1.VolumeMount{
+				Name:      debugInfoVolumeName,
+				MountPath: filepath.Join(debugInfoDir, fmt.Sprintf("%d", i)),
+			}
+			steps[i].VolumeMounts = append(steps[i].VolumeMounts, debugScriptsVolumeMount, debugInfoVolumeMount)
+		}
+		containers = append(containers, steps[i].Container)
 	}
 
 	// Place debug scripts if breakpoints are enabled
 	if len(breakpoints) > 0 {
-		// If breakpoint is not nil then should add the init container
-		// to write debug script files
-		*placeScripts = true
-
 		type script struct {
 			name    string
 			content string
 		}
 		debugScripts := []script{{
 			name:    "continue",
-			content: defaultScriptPreamble + fmt.Sprintf(debugContinueScriptTemplate, len(steps), debugInfoDir, runDir),
+			content: defaultScriptPreamble + fmt.Sprintf(debugContinueScriptTemplate, len(steps), debugInfoDir, mountPoint),
 		}, {
 			name:    "fail-continue",
-			content: defaultScriptPreamble + fmt.Sprintf(debugFailScriptTemplate, len(steps), debugInfoDir, runDir),
+			content: defaultScriptPreamble + fmt.Sprintf(debugFailScriptTemplate, len(steps), debugInfoDir, mountPoint),
 		}}
 
 		// Add debug or breakpoint related scripts to /tekton/debug/scripts

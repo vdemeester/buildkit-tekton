@@ -13,7 +13,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
 package workspace
 
 import (
@@ -23,7 +22,6 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/names"
-	"github.com/tektoncd/pipeline/pkg/substitution"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -71,12 +69,6 @@ func CreateVolumes(wb []v1beta1.WorkspaceBinding) map[string]corev1.Volume {
 		case w.Secret != nil:
 			s := *w.Secret
 			v.setVolumeSource(w.Name, name, corev1.VolumeSource{Secret: &s})
-		case w.Projected != nil:
-			s := *w.Projected
-			v.setVolumeSource(w.Name, name, corev1.VolumeSource{Projected: &s})
-		case w.CSI != nil:
-			csi := *w.CSI
-			v.setVolumeSource(w.Name, name, corev1.VolumeSource{CSI: &csi})
 		}
 	}
 	return v
@@ -105,7 +97,7 @@ func Apply(ctx context.Context, ts v1beta1.TaskSpec, wb []v1beta1.WorkspaceBindi
 
 	// Initialize StepTemplate if it hasn't been already
 	if ts.StepTemplate == nil {
-		ts.StepTemplate = &v1beta1.StepTemplate{}
+		ts.StepTemplate = &corev1.Container{}
 	}
 
 	isolatedWorkspaces := sets.NewString()
@@ -126,19 +118,6 @@ func Apply(ctx context.Context, ts v1beta1.TaskSpec, wb []v1beta1.WorkspaceBindi
 	}
 
 	for i := range wb {
-		if alphaAPIEnabled {
-			// Propagate missing Workspaces
-			addWorkspace := true
-			for _, ws := range ts.Workspaces {
-				if ws.Name == wb[i].Name {
-					addWorkspace = false
-					break
-				}
-			}
-			if addWorkspace {
-				ts.Workspaces = append(ts.Workspaces, v1beta1.WorkspaceDeclaration{Name: wb[i].Name})
-			}
-		}
 		w, err := getDeclaredWorkspace(wb[i].Name, ts.Workspaces)
 		if err != nil {
 			return nil, err
@@ -223,67 +202,4 @@ func AddSidecarVolumeMount(sidecar *v1beta1.Sidecar, volumeMount corev1.VolumeMo
 		}
 	}
 	sidecar.VolumeMounts = append(sidecar.VolumeMounts, volumeMount)
-}
-
-func findWorkspaceSubstitutionLocationsInSidecars(sidecars []v1beta1.Sidecar) sets.String {
-	locationsToCheck := sets.NewString()
-	for _, sidecar := range sidecars {
-		locationsToCheck.Insert(sidecar.Script)
-
-		for i := range sidecar.Args {
-			locationsToCheck.Insert(sidecar.Args[i])
-		}
-
-		for i := range sidecar.Command {
-			locationsToCheck.Insert(sidecar.Command[i])
-		}
-	}
-	return locationsToCheck
-}
-
-func findWorkspaceSubstitutionLocationsInSteps(steps []v1beta1.Step) sets.String {
-	locationsToCheck := sets.NewString()
-	for _, step := range steps {
-		locationsToCheck.Insert(step.Script)
-
-		for i := range step.Args {
-			locationsToCheck.Insert(step.Args[i])
-		}
-
-		for i := range step.Command {
-			locationsToCheck.Insert(step.Command[i])
-		}
-	}
-	return locationsToCheck
-}
-
-func findWorkspaceSubstitutionLocationsInStepTemplate(stepTemplate *v1beta1.StepTemplate) sets.String {
-	locationsToCheck := sets.NewString()
-
-	if stepTemplate != nil {
-		for i := range stepTemplate.Args {
-			locationsToCheck.Insert(stepTemplate.Args[i])
-		}
-		for i := range stepTemplate.Command {
-			locationsToCheck.Insert(stepTemplate.Command[i])
-		}
-	}
-	return locationsToCheck
-}
-
-// FindWorkspacesUsedByTask returns a set of all the workspaces that the TaskSpec uses.
-func FindWorkspacesUsedByTask(ts v1beta1.TaskSpec) (sets.String, error) {
-	locationsToCheck := sets.NewString()
-	locationsToCheck.Insert(findWorkspaceSubstitutionLocationsInSteps(ts.Steps).List()...)
-	locationsToCheck.Insert(findWorkspaceSubstitutionLocationsInSidecars(ts.Sidecars).List()...)
-	locationsToCheck.Insert(findWorkspaceSubstitutionLocationsInStepTemplate(ts.StepTemplate).List()...)
-	workspacesUsedInSteps := sets.NewString()
-	for item := range locationsToCheck {
-		workspacesUsed, _, errString := substitution.ExtractVariablesFromString(item, "workspaces")
-		if errString != "" {
-			return workspacesUsedInSteps, fmt.Errorf("Error while extracting workspace: %s", errString)
-		}
-		workspacesUsedInSteps.Insert(workspacesUsed...)
-	}
-	return workspacesUsedInSteps, nil
 }

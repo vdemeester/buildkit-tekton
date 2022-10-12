@@ -31,22 +31,22 @@ type ResolvedResultRefs []*ResolvedResultRef
 // If the value is from a Result, then the ResultReference will be populated to point to the ResultReference
 // which resulted in the value
 type ResolvedResultRef struct {
-	Value           v1beta1.ResultValue
+	Value           v1beta1.ArrayOrString
 	ResultReference v1beta1.ResultRef
 	FromTaskRun     string
 	FromRun         string
 }
 
-// ResolveResultRef resolves any ResultReference that are found in the target ResolvedPipelineTask
-func ResolveResultRef(pipelineRunState PipelineRunState, target *ResolvedPipelineTask) (ResolvedResultRefs, string, error) {
+// ResolveResultRef resolves any ResultReference that are found in the target ResolvedPipelineRunTask
+func ResolveResultRef(pipelineRunState PipelineRunState, target *ResolvedPipelineRunTask) (ResolvedResultRefs, string, error) {
 	resolvedResultRefs, pt, err := convertToResultRefs(pipelineRunState, target)
 	if err != nil {
 		return nil, pt, err
 	}
-	return validateArrayResultsIndex(removeDup(resolvedResultRefs))
+	return removeDup(resolvedResultRefs), "", nil
 }
 
-// ResolveResultRefs resolves any ResultReference that are found in the target ResolvedPipelineTask
+// ResolveResultRefs resolves any ResultReference that are found in the target ResolvedPipelineRunTask
 func ResolveResultRefs(pipelineRunState PipelineRunState, targets PipelineRunState) (ResolvedResultRefs, string, error) {
 	var allResolvedResultRefs ResolvedResultRefs
 	for _, target := range targets {
@@ -56,19 +56,7 @@ func ResolveResultRefs(pipelineRunState PipelineRunState, targets PipelineRunSta
 		}
 		allResolvedResultRefs = append(allResolvedResultRefs, resolvedResultRefs...)
 	}
-	return validateArrayResultsIndex(removeDup(allResolvedResultRefs))
-}
-
-// validateArrayResultsIndex checks if the result array indexing reference is out of bound of the array size
-func validateArrayResultsIndex(allResolvedResultRefs ResolvedResultRefs) (ResolvedResultRefs, string, error) {
-	for _, r := range allResolvedResultRefs {
-		if r.Value.Type == v1beta1.ParamTypeArray {
-			if r.ResultReference.ResultsIndex >= len(r.Value.ArrayVal) {
-				return nil, "", fmt.Errorf("Array Result Index %d for Task %s Result %s is out of bound of size %d", r.ResultReference.ResultsIndex, r.ResultReference.PipelineTask, r.ResultReference.Result, len(r.Value.ArrayVal))
-			}
-		}
-	}
-	return allResolvedResultRefs, "", nil
+	return removeDup(allResolvedResultRefs), "", nil
 }
 
 // extractResultRefs resolves any ResultReference that are found in param or pipeline result
@@ -129,7 +117,7 @@ func removeDup(refs ResolvedResultRefs) ResolvedResultRefs {
 // found they are resolved to a value by searching pipelineRunState. The list of resolved
 // references are returned. If an error is encountered due to an invalid result reference
 // then a nil list and error is returned instead.
-func convertToResultRefs(pipelineRunState PipelineRunState, target *ResolvedPipelineTask) (ResolvedResultRefs, string, error) {
+func convertToResultRefs(pipelineRunState PipelineRunState, target *ResolvedPipelineRunTask) (ResolvedResultRefs, string, error) {
 	var resolvedResultRefs ResolvedResultRefs
 	for _, ref := range v1beta1.PipelineTaskResultRefs(target.PipelineTask) {
 		resolved, pt, err := resolveResultRef(pipelineRunState, ref)
@@ -146,17 +134,15 @@ func resolveResultRef(pipelineState PipelineRunState, resultRef *v1beta1.ResultR
 	if referencedPipelineTask == nil {
 		return nil, resultRef.PipelineTask, fmt.Errorf("could not find task %q referenced by result", resultRef.PipelineTask)
 	}
-	if !referencedPipelineTask.isSuccessful() {
+	if !referencedPipelineTask.IsSuccessful() {
 		return nil, resultRef.PipelineTask, fmt.Errorf("task %q referenced by result was not successful", referencedPipelineTask.PipelineTask.Name)
 	}
 
-	var runName, runValue, taskRunName string
-	var resultValue v1beta1.ResultValue
+	var runName, taskRunName, resultValue string
 	var err error
 	if referencedPipelineTask.IsCustomTask() {
 		runName = referencedPipelineTask.Run.Name
-		runValue, err = findRunResultForParam(referencedPipelineTask.Run, resultRef)
-		resultValue = *v1beta1.NewStructuredValues(runValue)
+		resultValue, err = findRunResultForParam(referencedPipelineTask.Run, resultRef)
 		if err != nil {
 			return nil, resultRef.PipelineTask, err
 		}
@@ -169,7 +155,7 @@ func resolveResultRef(pipelineState PipelineRunState, resultRef *v1beta1.ResultR
 	}
 
 	return &ResolvedResultRef{
-		Value:           resultValue,
+		Value:           *v1beta1.NewArrayOrString(resultValue),
 		FromTaskRun:     taskRunName,
 		FromRun:         runName,
 		ResultReference: *resultRef,
@@ -186,61 +172,21 @@ func findRunResultForParam(run *v1alpha1.Run, reference *v1beta1.ResultRef) (str
 	return "", fmt.Errorf("Could not find result with name %s for task %s", reference.Result, reference.PipelineTask)
 }
 
-func findTaskResultForParam(taskRun *v1beta1.TaskRun, reference *v1beta1.ResultRef) (v1beta1.ResultValue, error) {
+func findTaskResultForParam(taskRun *v1beta1.TaskRun, reference *v1beta1.ResultRef) (string, error) {
 	results := taskRun.Status.TaskRunStatusFields.TaskRunResults
 	for _, result := range results {
 		if result.Name == reference.Result {
 			return result.Value, nil
 		}
 	}
-	return v1beta1.ResultValue{}, fmt.Errorf("Could not find result with name %s for task %s", reference.Result, reference.PipelineTask)
+	return "", fmt.Errorf("Could not find result with name %s for task %s", reference.Result, reference.PipelineTask)
 }
 
 func (rs ResolvedResultRefs) getStringReplacements() map[string]string {
 	replacements := map[string]string{}
 	for _, r := range rs {
-		switch r.Value.Type {
-		case v1beta1.ParamTypeArray:
-			for i := 0; i < len(r.Value.ArrayVal); i++ {
-				for _, target := range r.getReplaceTargetfromArrayIndex(i) {
-					replacements[target] = r.Value.ArrayVal[i]
-				}
-			}
-		case v1beta1.ParamTypeObject:
-			for key, element := range r.Value.ObjectVal {
-				for _, target := range r.getReplaceTargetfromObjectKey(key) {
-					replacements[target] = element
-				}
-			}
-
-		default:
-			for _, target := range r.getReplaceTarget() {
-				replacements[target] = r.Value.StringVal
-			}
-		}
-	}
-	return replacements
-}
-
-func (rs ResolvedResultRefs) getArrayReplacements() map[string][]string {
-	replacements := map[string][]string{}
-	for _, r := range rs {
-		if r.Value.Type == v1beta1.ParamType(v1beta1.ResultsTypeArray) {
-			for _, target := range r.getReplaceTarget() {
-				replacements[target] = r.Value.ArrayVal
-			}
-		}
-	}
-	return replacements
-}
-
-func (rs ResolvedResultRefs) getObjectReplacements() map[string]map[string]string {
-	replacements := map[string]map[string]string{}
-	for _, r := range rs {
-		if r.Value.Type == v1beta1.ParamType(v1beta1.ResultsTypeObject) {
-			for _, target := range r.getReplaceTarget() {
-				replacements[target] = r.Value.ObjectVal
-			}
+		for _, target := range r.getReplaceTarget() {
+			replacements[target] = r.Value.StringVal
 		}
 	}
 	return replacements
@@ -250,22 +196,5 @@ func (r *ResolvedResultRef) getReplaceTarget() []string {
 	return []string{
 		fmt.Sprintf("%s.%s.%s.%s", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result),
 		fmt.Sprintf("%s.%s.%s[%q]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result),
-		fmt.Sprintf("%s.%s.%s['%s']", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result),
-	}
-}
-
-func (r *ResolvedResultRef) getReplaceTargetfromArrayIndex(idx int) []string {
-	return []string{
-		fmt.Sprintf("%s.%s.%s.%s[%d]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, idx),
-		fmt.Sprintf("%s.%s.%s[%q][%d]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, idx),
-		fmt.Sprintf("%s.%s.%s['%s'][%d]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, idx),
-	}
-}
-
-func (r *ResolvedResultRef) getReplaceTargetfromObjectKey(key string) []string {
-	return []string{
-		fmt.Sprintf("%s.%s.%s.%s.%s", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, key),
-		fmt.Sprintf("%s.%s.%s[%q][%s]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, key),
-		fmt.Sprintf("%s.%s.%s['%s'][%s]", v1beta1.ResultTaskPart, r.ResultReference.PipelineTask, v1beta1.ResultResultPart, r.ResultReference.Result, key),
 	}
 }

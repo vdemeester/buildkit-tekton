@@ -25,13 +25,11 @@ import (
 
 var _ apis.Defaultable = (*Run)(nil)
 
-// SetDefaults implements apis.Defaultable
 func (r *Run) SetDefaults(ctx context.Context) {
 	ctx = apis.WithinParent(ctx, r.ObjectMeta)
 	r.Spec.SetDefaults(apis.WithinSpec(ctx))
 }
 
-// SetDefaults implements apis.Defaultable
 func (rs *RunSpec) SetDefaults(ctx context.Context) {
 	cfg := config.FromContextOrDefaults(ctx)
 	defaultSA := cfg.Defaults.DefaultServiceAccount

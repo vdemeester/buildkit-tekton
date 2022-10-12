@@ -69,7 +69,6 @@ func (dc *basicDocker) String() string {
 	return strings.Join(urls, ",")
 }
 
-// Set sets a secret for a URL from a value in the format of "secret=url"
 func (dc *basicDocker) Set(value string) error {
 	parts := strings.Split(value, "=")
 	if len(parts) != 2 {
@@ -94,7 +93,6 @@ type arrayArg struct {
 	Values []string
 }
 
-// Set adds a value to the arrayArg's value slice
 func (aa *arrayArg) Set(value string) error {
 	aa.Values = append(aa.Values, value)
 	return nil

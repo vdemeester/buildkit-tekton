@@ -21,20 +21,21 @@ import (
 	"time"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
-	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 )
 
 var _ apis.Defaultable = (*PipelineRun)(nil)
 
-// SetDefaults implements apis.Defaultable
 func (pr *PipelineRun) SetDefaults(ctx context.Context) {
 	pr.Spec.SetDefaults(ctx)
 }
 
-// SetDefaults implements apis.Defaultable
 func (prs *PipelineRunSpec) SetDefaults(ctx context.Context) {
+	if config.FromContextOrDefaults(ctx).FeatureFlags.EnableAPIFields == "alpha" {
+		ctx = WithImplicitParamsEnabled(ctx, true)
+	}
+
 	cfg := config.FromContextOrDefaults(ctx)
 	if prs.Timeout == nil && prs.Timeouts == nil {
 		prs.Timeout = &metav1.Duration{Duration: time.Duration(cfg.Defaults.DefaultTimeoutMinutes) * time.Minute}
@@ -50,9 +51,12 @@ func (prs *PipelineRunSpec) SetDefaults(ctx context.Context) {
 	}
 
 	defaultPodTemplate := cfg.Defaults.DefaultPodTemplate
-	prs.PodTemplate = pod.MergePodTemplateWithDefault(prs.PodTemplate, defaultPodTemplate)
+	prs.PodTemplate = mergePodTemplateWithDefault(prs.PodTemplate, defaultPodTemplate)
 
 	if prs.PipelineSpec != nil {
+		if GetImplicitParamsEnabled(ctx) {
+			ctx = AddContextParams(ctx, prs.Params)
+		}
 		prs.PipelineSpec.SetDefaults(ctx)
 	}
 }

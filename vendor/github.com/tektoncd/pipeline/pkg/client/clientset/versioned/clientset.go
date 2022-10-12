@@ -20,9 +20,7 @@ package versioned
 
 import (
 	"fmt"
-	"net/http"
 
-	tektonv1 "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/typed/pipeline/v1"
 	tektonv1alpha1 "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/typed/pipeline/v1alpha1"
 	tektonv1beta1 "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/typed/pipeline/v1beta1"
 	discovery "k8s.io/client-go/discovery"
@@ -34,7 +32,6 @@ type Interface interface {
 	Discovery() discovery.DiscoveryInterface
 	TektonV1alpha1() tektonv1alpha1.TektonV1alpha1Interface
 	TektonV1beta1() tektonv1beta1.TektonV1beta1Interface
-	TektonV1() tektonv1.TektonV1Interface
 }
 
 // Clientset contains the clients for groups. Each group has exactly one
@@ -43,7 +40,6 @@ type Clientset struct {
 	*discovery.DiscoveryClient
 	tektonV1alpha1 *tektonv1alpha1.TektonV1alpha1Client
 	tektonV1beta1  *tektonv1beta1.TektonV1beta1Client
-	tektonV1       *tektonv1.TektonV1Client
 }
 
 // TektonV1alpha1 retrieves the TektonV1alpha1Client
@@ -54,11 +50,6 @@ func (c *Clientset) TektonV1alpha1() tektonv1alpha1.TektonV1alpha1Interface {
 // TektonV1beta1 retrieves the TektonV1beta1Client
 func (c *Clientset) TektonV1beta1() tektonv1beta1.TektonV1beta1Interface {
 	return c.tektonV1beta1
-}
-
-// TektonV1 retrieves the TektonV1Client
-func (c *Clientset) TektonV1() tektonv1.TektonV1Interface {
-	return c.tektonV1
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -72,29 +63,7 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 // NewForConfig creates a new Clientset for the given config.
 // If config's RateLimiter is not set and QPS and Burst are acceptable,
 // NewForConfig will generate a rate-limiter in configShallowCopy.
-// NewForConfig is equivalent to NewForConfigAndClient(c, httpClient),
-// where httpClient was generated with rest.HTTPClientFor(c).
 func NewForConfig(c *rest.Config) (*Clientset, error) {
-	configShallowCopy := *c
-
-	if configShallowCopy.UserAgent == "" {
-		configShallowCopy.UserAgent = rest.DefaultKubernetesUserAgent()
-	}
-
-	// share the transport between all clients
-	httpClient, err := rest.HTTPClientFor(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewForConfigAndClient(&configShallowCopy, httpClient)
-}
-
-// NewForConfigAndClient creates a new Clientset for the given config and http client.
-// Note the http client provided takes precedence over the configured transport values.
-// If config's RateLimiter is not set and QPS and Burst are acceptable,
-// NewForConfigAndClient will generate a rate-limiter in configShallowCopy.
-func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset, error) {
 	configShallowCopy := *c
 	if configShallowCopy.RateLimiter == nil && configShallowCopy.QPS > 0 {
 		if configShallowCopy.Burst <= 0 {
@@ -102,23 +71,18 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 		}
 		configShallowCopy.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(configShallowCopy.QPS, configShallowCopy.Burst)
 	}
-
 	var cs Clientset
 	var err error
-	cs.tektonV1alpha1, err = tektonv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	cs.tektonV1alpha1, err = tektonv1alpha1.NewForConfig(&configShallowCopy)
 	if err != nil {
 		return nil, err
 	}
-	cs.tektonV1beta1, err = tektonv1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
-	if err != nil {
-		return nil, err
-	}
-	cs.tektonV1, err = tektonv1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	cs.tektonV1beta1, err = tektonv1beta1.NewForConfig(&configShallowCopy)
 	if err != nil {
 		return nil, err
 	}
 
-	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfigAndClient(&configShallowCopy, httpClient)
+	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +92,12 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 // NewForConfigOrDie creates a new Clientset for the given config and
 // panics if there is an error in the config.
 func NewForConfigOrDie(c *rest.Config) *Clientset {
-	cs, err := NewForConfig(c)
-	if err != nil {
-		panic(err)
-	}
-	return cs
+	var cs Clientset
+	cs.tektonV1alpha1 = tektonv1alpha1.NewForConfigOrDie(c)
+	cs.tektonV1beta1 = tektonv1beta1.NewForConfigOrDie(c)
+
+	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
+	return &cs
 }
 
 // New creates a new Clientset for the given RESTClient.
@@ -140,7 +105,6 @@ func New(c rest.Interface) *Clientset {
 	var cs Clientset
 	cs.tektonV1alpha1 = tektonv1alpha1.New(c)
 	cs.tektonV1beta1 = tektonv1beta1.New(c)
-	cs.tektonV1 = tektonv1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs

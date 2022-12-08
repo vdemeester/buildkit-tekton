@@ -21,36 +21,38 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	resolutionutil "github.com/tektoncd/pipeline/pkg/internal/resolution"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // GetPipeline is a function used to retrieve Pipelines.
-type GetPipeline func(context.Context, string) (v1beta1.PipelineObject, error)
+type GetPipeline func(context.Context, string) (v1beta1.PipelineObject, *v1beta1.ConfigSource, error)
 
 // GetPipelineData will retrieve the Pipeline metadata and Spec associated with the
 // provided PipelineRun. This can come from a reference Pipeline or from the PipelineRun's
 // metadata and embedded PipelineSpec.
-func GetPipelineData(ctx context.Context, pipelineRun *v1beta1.PipelineRun, getPipeline GetPipeline) (*metav1.ObjectMeta, *v1beta1.PipelineSpec, error) {
+func GetPipelineData(ctx context.Context, pipelineRun *v1beta1.PipelineRun, getPipeline GetPipeline) (*resolutionutil.ResolvedObjectMeta, *v1beta1.PipelineSpec, error) {
 	pipelineMeta := metav1.ObjectMeta{}
+	var configSource *v1beta1.ConfigSource
 	pipelineSpec := v1beta1.PipelineSpec{}
-	cfg := config.FromContextOrDefaults(ctx)
 	switch {
 	case pipelineRun.Spec.PipelineRef != nil && pipelineRun.Spec.PipelineRef.Name != "":
 		// Get related pipeline for pipelinerun
-		t, err := getPipeline(ctx, pipelineRun.Spec.PipelineRef.Name)
+		p, source, err := getPipeline(ctx, pipelineRun.Spec.PipelineRef.Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error when listing pipelines for pipelineRun %s: %w", pipelineRun.Name, err)
 		}
-		pipelineMeta = t.PipelineMetadata()
-		pipelineSpec = t.PipelineSpec()
-		pipelineSpec.SetDefaults(ctx)
+		pipelineMeta = p.PipelineMetadata()
+		pipelineSpec = p.PipelineSpec()
+		configSource = source
 	case pipelineRun.Spec.PipelineSpec != nil:
 		pipelineMeta = pipelineRun.ObjectMeta
 		pipelineSpec = *pipelineRun.Spec.PipelineSpec
-	case cfg.FeatureFlags.EnableAPIFields == config.AlphaAPIFields && pipelineRun.Spec.PipelineRef != nil && pipelineRun.Spec.PipelineRef.Resolver != "":
-		pipeline, err := getPipeline(ctx, "")
+		// TODO: if we want to set source for embedded pipeline, set it here.
+		// https://github.com/tektoncd/pipeline/issues/5522
+	case pipelineRun.Spec.PipelineRef != nil && pipelineRun.Spec.PipelineRef.Resolver != "":
+		pipeline, source, err := getPipeline(ctx, "")
 		switch {
 		case err != nil:
 			return nil, nil, err
@@ -60,8 +62,14 @@ func GetPipelineData(ctx context.Context, pipelineRun *v1beta1.PipelineRun, getP
 			pipelineMeta = pipeline.PipelineMetadata()
 			pipelineSpec = pipeline.PipelineSpec()
 		}
+		configSource = source
 	default:
 		return nil, nil, fmt.Errorf("pipelineRun %s not providing PipelineRef or PipelineSpec", pipelineRun.Name)
 	}
-	return &pipelineMeta, &pipelineSpec, nil
+
+	pipelineSpec.SetDefaults(ctx)
+	return &resolutionutil.ResolvedObjectMeta{
+		ObjectMeta:   &pipelineMeta,
+		ConfigSource: configSource,
+	}, &pipelineSpec, nil
 }

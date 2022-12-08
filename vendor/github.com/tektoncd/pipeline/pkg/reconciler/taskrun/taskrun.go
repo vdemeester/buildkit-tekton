@@ -37,6 +37,7 @@ import (
 	resourcelisters "github.com/tektoncd/pipeline/pkg/client/resource/listers/resource/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/internal/affinityassistant"
 	"github.com/tektoncd/pipeline/pkg/internal/computeresources"
+	resolutionutil "github.com/tektoncd/pipeline/pkg/internal/resolution"
 	podconvert "github.com/tektoncd/pipeline/pkg/pod"
 	tknreconciler "github.com/tektoncd/pipeline/pkg/reconciler"
 	"github.com/tektoncd/pipeline/pkg/reconciler/events"
@@ -47,6 +48,7 @@ import (
 	resolution "github.com/tektoncd/pipeline/pkg/resolution/resource"
 	"github.com/tektoncd/pipeline/pkg/taskrunmetrics"
 	_ "github.com/tektoncd/pipeline/pkg/taskrunmetrics/fake" // Make sure the taskrunmetrics are setup
+	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	"github.com/tektoncd/pipeline/pkg/workspace"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -59,6 +61,7 @@ import (
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/changeset"
 	"knative.dev/pkg/controller"
+	"knative.dev/pkg/kmap"
 	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/logging"
 	pkgreconciler "knative.dev/pkg/reconciler"
@@ -332,6 +335,10 @@ func (c *Reconciler) prepare(ctx context.Context, tr *v1beta1.TaskRun) (*v1beta1
 		message := fmt.Sprintf("TaskRun %s/%s awaiting remote resource", tr.Namespace, tr.Name)
 		tr.Status.MarkResourceOngoing(v1beta1.TaskRunReasonResolvingTaskRef, message)
 		return nil, nil, err
+	case errors.Is(err, trustedresources.ErrorResourceVerificationFailed):
+		logger.Errorf("TaskRun %s/%s referred task failed signature verification", tr.Namespace, tr.Name)
+		tr.Status.MarkResourceFailed(podconvert.ReasonResourceVerificationFailed, err)
+		return nil, nil, controller.NewPermanentError(err)
 	case err != nil:
 		logger.Errorf("Failed to determine Task spec to use for taskrun %s: %v", tr.Name, err)
 		if resources.IsGetTaskErrTransient(err) {
@@ -341,7 +348,7 @@ func (c *Reconciler) prepare(ctx context.Context, tr *v1beta1.TaskRun) (*v1beta1
 		return nil, nil, controller.NewPermanentError(err)
 	default:
 		// Store the fetched TaskSpec on the TaskRun for auditing
-		if err := storeTaskSpecAndMergeMeta(tr, taskSpec, taskMeta); err != nil {
+		if err := storeTaskSpecAndMergeMeta(ctx, tr, taskSpec, taskMeta); err != nil {
 			logger.Errorf("Failed to store TaskSpec on TaskRun.Statusfor taskrun %s: %v", tr.Name, err)
 		}
 	}
@@ -599,8 +606,8 @@ func (c *Reconciler) updateLabelsAndAnnotations(ctx context.Context, tr *v1beta1
 		// If we want to switch this to Patch, then we will need to teach the utilities in test/controller.go
 		// to deal with Patch (setting resourceVersion, and optimistic concurrency checks).
 		newTr = newTr.DeepCopy()
-		newTr.Labels = tr.Labels
-		newTr.Annotations = tr.Annotations
+		newTr.Labels = kmap.Union(newTr.Labels, tr.Labels)
+		newTr.Annotations = kmap.Union(newTr.Annotations, tr.Annotations)
 		return c.PipelineClientSet.TektonV1beta1().TaskRuns(tr.Namespace).Update(ctx, newTr, metav1.UpdateOptions{})
 	}
 	return newTr, nil
@@ -908,38 +915,36 @@ func applyVolumeClaimTemplates(workspaceBindings []v1beta1.WorkspaceBinding, own
 	return taskRunWorkspaceBindings
 }
 
-func storeTaskSpecAndMergeMeta(tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec, meta *metav1.ObjectMeta) error {
+func storeTaskSpecAndMergeMeta(ctx context.Context, tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec, meta *resolutionutil.ResolvedObjectMeta) error {
 	// Only store the TaskSpec once, if it has never been set before.
 	if tr.Status.TaskSpec == nil {
 		tr.Status.TaskSpec = ts
-		// Propagate annotations from Task to TaskRun.
-		if tr.ObjectMeta.Annotations == nil {
-			tr.ObjectMeta.Annotations = make(map[string]string, len(meta.Annotations))
+		if meta == nil {
+			return nil
 		}
-		for key, value := range meta.Annotations {
-			// Do not override duplicates between TaskRun and Task
-			// TaskRun labels take precedences over Task
-			if _, ok := tr.ObjectMeta.Annotations[key]; !ok {
-				tr.ObjectMeta.Annotations[key] = value
-			}
-		}
-		// Propagate labels from Task to TaskRun.
-		if tr.ObjectMeta.Labels == nil {
-			tr.ObjectMeta.Labels = make(map[string]string, len(meta.Labels)+1)
-		}
-		for key, value := range meta.Labels {
-			// Do not override duplicates between TaskRun and Task
-			// TaskRun labels take precedences over Task
-			if _, ok := tr.ObjectMeta.Labels[key]; !ok {
-				tr.ObjectMeta.Labels[key] = value
-			}
-		}
+
+		// Propagate annotations from Task to TaskRun. TaskRun annotations take precedences over Task.
+		tr.ObjectMeta.Annotations = kmap.Union(meta.Annotations, tr.ObjectMeta.Annotations)
+		// Propagate labels from Task to TaskRun. TaskRun labels take precedences over Task.
+		tr.ObjectMeta.Labels = kmap.Union(meta.Labels, tr.ObjectMeta.Labels)
 		if tr.Spec.TaskRef != nil {
 			if tr.Spec.TaskRef.Kind == "ClusterTask" {
 				tr.ObjectMeta.Labels[pipeline.ClusterTaskLabelKey] = meta.Name
 			} else {
 				tr.ObjectMeta.Labels[pipeline.TaskLabelKey] = meta.Name
 			}
+		}
+	}
+
+	// Propagate ConfigSource from remote resolution to TaskRun Status
+	// This lives outside of the status.spec check to avoid the case where only the spec is available in the first reconcile and source comes in next reconcile.
+	cfg := config.FromContextOrDefaults(ctx)
+	if cfg.FeatureFlags.EnableProvenanceInStatus && meta != nil && meta.ConfigSource != nil {
+		if tr.Status.Provenance == nil {
+			tr.Status.Provenance = &v1beta1.Provenance{}
+		}
+		if tr.Status.Provenance.ConfigSource == nil {
+			tr.Status.Provenance.ConfigSource = meta.ConfigSource
 		}
 	}
 	return nil

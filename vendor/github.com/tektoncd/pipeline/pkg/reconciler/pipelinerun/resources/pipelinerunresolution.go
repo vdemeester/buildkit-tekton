@@ -29,6 +29,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/list"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"github.com/tektoncd/pipeline/pkg/remote"
+	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmeta"
@@ -255,7 +256,7 @@ func (t ResolvedPipelineTask) isCancelledForTimeOut() bool {
 			isDone = isDone && run.IsDone()
 			c := run.Status.GetCondition(apis.ConditionSucceeded)
 			runCancelled := c.IsFalse() &&
-				c.Reason == v1alpha1.RunReasonCancelled &&
+				c.Reason == v1alpha1.RunReasonCancelled.String() &&
 				run.Spec.StatusMessage == v1alpha1.RunCancelledByPipelineTimeoutMsg
 			atLeastOneCancelled = atLeastOneCancelled || runCancelled
 		}
@@ -266,7 +267,7 @@ func (t ResolvedPipelineTask) isCancelledForTimeOut() bool {
 		}
 		c := t.Run.Status.GetCondition(apis.ConditionSucceeded)
 		return c != nil && c.IsFalse() &&
-			c.Reason == v1alpha1.RunReasonCancelled &&
+			c.Reason == v1alpha1.RunReasonCancelled.String() &&
 			t.Run.Spec.StatusMessage == v1alpha1.RunCancelledByPipelineTimeoutMsg
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
@@ -307,7 +308,7 @@ func (t ResolvedPipelineTask) isCancelled() bool {
 		for _, run := range t.Runs {
 			isDone = isDone && run.IsDone()
 			c := run.Status.GetCondition(apis.ConditionSucceeded)
-			runCancelled := c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled
+			runCancelled := c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled.String()
 			atLeastOneCancelled = atLeastOneCancelled || runCancelled
 		}
 		return atLeastOneCancelled && isDone
@@ -316,7 +317,7 @@ func (t ResolvedPipelineTask) isCancelled() bool {
 			return false
 		}
 		c := t.Run.Status.GetCondition(apis.ConditionSucceeded)
-		return c != nil && c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled
+		return c != nil && c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled.String()
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
 			return false
@@ -777,9 +778,13 @@ func resolveTask(
 			spec = *taskRun.Status.TaskSpec
 			taskName = pipelineTask.TaskRef.Name
 		} else {
-			t, err = getTask(ctx, pipelineTask.TaskRef.Name)
+			// Following minimum status principle (TEP-0100), no need to propagate the source about PipelineTask up to PipelineRun status.
+			// Instead, the child TaskRun's status will be the place recording the source of individual task.
+			t, _, err = getTask(ctx, pipelineTask.TaskRef.Name)
 			switch {
 			case errors.Is(err, remote.ErrorRequestInProgress):
+				return v1beta1.TaskSpec{}, "", "", err
+			case errors.Is(err, trustedresources.ErrorResourceVerificationFailed):
 				return v1beta1.TaskSpec{}, "", "", err
 			case err != nil:
 				return v1beta1.TaskSpec{}, "", "", &TaskNotFoundError{

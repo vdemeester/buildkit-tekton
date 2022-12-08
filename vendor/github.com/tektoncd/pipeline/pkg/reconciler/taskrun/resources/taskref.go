@@ -30,10 +30,12 @@ import (
 	"github.com/tektoncd/pipeline/pkg/remote/oci"
 	"github.com/tektoncd/pipeline/pkg/remote/resolution"
 	remoteresource "github.com/tektoncd/pipeline/pkg/resolution/resource"
+	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/kmeta"
+	"knative.dev/pkg/logging"
 )
 
 // This error is defined in etcd at
@@ -56,16 +58,21 @@ func GetTaskKind(taskrun *v1beta1.TaskRun) v1beta1.TaskKind {
 // cluster or authorize against an external repositroy. It will figure out whether it needs to look in the cluster or in
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 func GetTaskFuncFromTaskRun(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester, taskrun *v1beta1.TaskRun) (GetTask, error) {
-	// if the spec is already in the status, do not try to fetch it again, just use it as source of truth
+	// if the spec is already in the status, do not try to fetch it again, just use it as source of truth.
+	// Same for the Source field in the Status.Provenance.
 	if taskrun.Status.TaskSpec != nil {
-		return func(_ context.Context, name string) (v1beta1.TaskObject, error) {
+		return func(_ context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
+			var configsource *v1beta1.ConfigSource
+			if taskrun.Status.Provenance != nil {
+				configsource = taskrun.Status.Provenance.ConfigSource
+			}
 			return &v1beta1.Task{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      name,
 					Namespace: taskrun.Namespace,
 				},
 				Spec: *taskrun.Status.TaskSpec,
-			}, nil
+			}, configsource, nil
 		}, nil
 	}
 	return GetTaskFunc(ctx, k8s, tekton, requester, taskrun, taskrun.Spec.TaskRef, taskrun.Name, taskrun.Namespace, taskrun.Spec.ServiceAccountName)
@@ -87,24 +94,23 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 	case cfg.FeatureFlags.EnableTektonOCIBundles && tr != nil && tr.Bundle != "":
 		// Return an inline function that implements GetTask by calling Resolver.Get with the specified task type and
 		// casting it to a TaskObject.
-		return func(ctx context.Context, name string) (v1beta1.TaskObject, error) {
+		return func(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
 			// If there is a bundle url at all, construct an OCI resolver to fetch the task.
 			kc, err := k8schain.New(ctx, k8s, k8schain.Options{
 				Namespace:          namespace,
 				ServiceAccountName: saName,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("failed to get keychain: %w", err)
+				return nil, nil, fmt.Errorf("failed to get keychain: %w", err)
 			}
 			resolver := oci.NewResolver(tr.Bundle, kc)
 
-			return resolveTask(ctx, resolver, name, kind)
+			return resolveTask(ctx, resolver, name, kind, k8s)
 		}, nil
-	case cfg.FeatureFlags.EnableAPIFields == config.AlphaAPIFields && tr != nil && tr.Resolver != "" && requester != nil:
+	case tr != nil && tr.Resolver != "" && requester != nil:
 		// Return an inline function that implements GetTask by calling Resolver.Get with the specified task type and
 		// casting it to a TaskObject.
-		return func(ctx context.Context, name string) (v1beta1.TaskObject, error) {
-			params := map[string]string{}
+		return func(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
 			var replacedParams []v1beta1.Param
 			if ownerAsTR, ok := owner.(*v1beta1.TaskRun); ok {
 				stringReplacements, arrayReplacements := paramsFromTaskRun(ctx, ownerAsTR)
@@ -118,11 +124,8 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 			} else {
 				replacedParams = append(replacedParams, tr.Params...)
 			}
-			for _, p := range replacedParams {
-				params[p.Name] = p.Value.StringVal
-			}
-			resolver := resolution.NewResolver(requester, owner, string(tr.Resolver), trName, namespace, params)
-			return resolveTask(ctx, resolver, name, kind)
+			resolver := resolution.NewResolver(requester, owner, string(tr.Resolver), trName, namespace, replacedParams)
+			return resolveTask(ctx, resolver, name, kind, k8s)
 		}, nil
 
 	default:
@@ -131,6 +134,7 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 			Namespace:    namespace,
 			Kind:         kind,
 			Tektonclient: tekton,
+			K8sclient:    k8s,
 		}
 		return local.GetTask, nil
 	}
@@ -140,18 +144,22 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 // fetch a task with given name. An error is returned if the
 // remoteresource doesn't work or the returned data isn't a valid
 // v1beta1.TaskObject.
-func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kind v1beta1.TaskKind) (v1beta1.TaskObject, error) {
+func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kind v1beta1.TaskKind, k8s kubernetes.Interface) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
 	// Because the resolver will only return references with the same kind (eg ClusterTask), this will ensure we
 	// don't accidentally return a Task with the same name but different kind.
-	obj, err := resolver.Get(ctx, strings.TrimSuffix(strings.ToLower(string(kind)), "s"), name)
+	obj, configSource, err := resolver.Get(ctx, strings.TrimSuffix(strings.ToLower(string(kind)), "s"), name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	taskObj, err := readRuntimeObjectAsTask(ctx, obj)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert obj %s into Task", obj.GetObjectKind().GroupVersionKind().String())
+		return nil, nil, fmt.Errorf("failed to convert obj %s into Task", obj.GetObjectKind().GroupVersionKind().String())
 	}
-	return taskObj, nil
+	// TODO(#5527): Consider move this function call to GetTaskData
+	if err := verifyResolvedTask(ctx, taskObj, k8s); err != nil {
+		return nil, nil, err
+	}
+	return taskObj, configSource, nil
 }
 
 // readRuntimeObjectAsTask tries to convert a generic runtime.Object
@@ -161,10 +169,8 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kin
 // older TaskObject into its v1beta1 equivalent.
 func readRuntimeObjectAsTask(ctx context.Context, obj runtime.Object) (v1beta1.TaskObject, error) {
 	if task, ok := obj.(v1beta1.TaskObject); ok {
-		task.SetDefaults(ctx)
 		return task, nil
 	}
-
 	return nil, errors.New("resource is not a task")
 }
 
@@ -173,27 +179,53 @@ type LocalTaskRefResolver struct {
 	Namespace    string
 	Kind         v1beta1.TaskKind
 	Tektonclient clientset.Interface
+	K8sclient    kubernetes.Interface
 }
 
 // GetTask will resolve either a Task or ClusterTask from the local cluster using a versioned Tekton client. It will
 // return an error if it can't find an appropriate Task for any reason.
-func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (v1beta1.TaskObject, error) {
+// TODO: if we want to set source for in-cluster task, set it here.
+// https://github.com/tektoncd/pipeline/issues/5522
+func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
 	if l.Kind == v1beta1.ClusterTaskKind {
 		task, err := l.Tektonclient.TektonV1beta1().ClusterTasks().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return task, nil
+		return task, nil, nil
 	}
 
 	// If we are going to resolve this reference locally, we need a namespace scope.
 	if l.Namespace == "" {
-		return nil, fmt.Errorf("must specify namespace to resolve reference to task %s", name)
+		return nil, nil, fmt.Errorf("must specify namespace to resolve reference to task %s", name)
 	}
-	return l.Tektonclient.TektonV1beta1().Tasks(l.Namespace).Get(ctx, name, metav1.GetOptions{})
+	task, err := l.Tektonclient.TektonV1beta1().Tasks(l.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := verifyResolvedTask(ctx, task, l.K8sclient); err != nil {
+		return nil, nil, err
+	}
+	return task, nil, nil
 }
 
 // IsGetTaskErrTransient returns true if an error returned by GetTask is retryable.
 func IsGetTaskErrTransient(err error) bool {
 	return strings.Contains(err.Error(), errEtcdLeaderChange)
+}
+
+// verifyResolvedTask verifies the resolved task
+func verifyResolvedTask(ctx context.Context, task v1beta1.TaskObject, k8s kubernetes.Interface) error {
+	cfg := config.FromContextOrDefaults(ctx)
+	if cfg.FeatureFlags.ResourceVerificationMode == config.EnforceResourceVerificationMode || cfg.FeatureFlags.ResourceVerificationMode == config.WarnResourceVerificationMode {
+		if err := trustedresources.VerifyTask(ctx, task, k8s); err != nil {
+			if cfg.FeatureFlags.ResourceVerificationMode == config.EnforceResourceVerificationMode {
+				return trustedresources.ErrorResourceVerificationFailed
+			}
+			logger := logging.FromContext(ctx)
+			logger.Warnf("trusted resources verification failed: %v", err)
+			return nil
+		}
+	}
+	return nil
 }

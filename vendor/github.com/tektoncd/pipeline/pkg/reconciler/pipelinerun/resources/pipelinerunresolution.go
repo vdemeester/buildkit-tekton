@@ -29,6 +29,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/list"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"github.com/tektoncd/pipeline/pkg/remote"
+	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmeta"
@@ -56,18 +57,18 @@ func (e *TaskNotFoundError) Error() string {
 	return fmt.Sprintf("Couldn't retrieve Task %q: %s", e.Name, e.Msg)
 }
 
-// ResolvedPipelineTask contains a PipelineTask and its associated TaskRun(s) or Runs, if they exist.
+// ResolvedPipelineTask contains a PipelineTask and its associated TaskRun(s) or RunObjects, if they exist.
 type ResolvedPipelineTask struct {
 	TaskRunName  string
 	TaskRun      *v1beta1.TaskRun
 	TaskRunNames []string
 	TaskRuns     []*v1beta1.TaskRun
-	// If the PipelineTask is a Custom Task, RunName and Run will be set.
+	// If the PipelineTask is a Custom Task, RunObjectName and RunObject will be set.
 	CustomTask            bool
-	RunName               string
-	Run                   *v1alpha1.Run
-	RunNames              []string
-	Runs                  []*v1alpha1.Run
+	RunObjectName         string
+	RunObject             v1beta1.RunObject
+	RunObjectNames        []string
+	RunObjects            []v1beta1.RunObject
 	PipelineTask          *v1beta1.PipelineTask
 	ResolvedTaskResources *resources.ResolvedTaskResources
 }
@@ -81,11 +82,11 @@ func (t ResolvedPipelineTask) isDone(facts *PipelineRunFacts) bool {
 func (t ResolvedPipelineTask) IsRunning() bool {
 	switch {
 	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+		if len(t.RunObjects) == 0 {
 			return false
 		}
 	case t.IsCustomTask():
-		if t.Run == nil {
+		if t.RunObject == nil {
 			return false
 		}
 	case t.IsMatrixed():
@@ -115,17 +116,17 @@ func (t ResolvedPipelineTask) IsMatrixed() bool {
 func (t ResolvedPipelineTask) isSuccessful() bool {
 	switch {
 	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+		if len(t.RunObjects) == 0 {
 			return false
 		}
-		for _, run := range t.Runs {
+		for _, run := range t.RunObjects {
 			if !run.IsSuccessful() {
 				return false
 			}
 		}
 		return true
 	case t.IsCustomTask():
-		return t.Run.IsSuccessful()
+		return t.RunObject != nil && t.RunObject.IsSuccessful()
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
 			return false
@@ -156,26 +157,26 @@ func (t ResolvedPipelineTask) isFailure() bool {
 	}
 	var c *apis.Condition
 	var isDone bool
-
 	switch {
 	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+		if len(t.RunObjects) == 0 {
 			return false
 		}
 		isDone = true
 		atLeastOneFailed := false
-		for _, run := range t.Runs {
+		for _, run := range t.RunObjects {
 			isDone = isDone && run.IsDone()
-			runFailed := run.Status.GetCondition(apis.ConditionSucceeded).IsFalse() && !t.hasRemainingRetries()
+			runFailed := run.GetStatusCondition().GetCondition(apis.ConditionSucceeded).IsFalse() && !t.isRunRetriable()
 			atLeastOneFailed = atLeastOneFailed || runFailed
 		}
 		return atLeastOneFailed && isDone
 	case t.IsCustomTask():
-		if t.Run == nil {
+		if t.RunObject == nil {
 			return false
 		}
-		c = t.Run.Status.GetCondition(apis.ConditionSucceeded)
-		isDone = t.Run.IsDone()
+		c = t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
+		isDone = t.RunObject.IsDone()
+		return isDone && c.IsFalse() && !t.isRunRetriable()
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
 			return false
@@ -184,7 +185,7 @@ func (t ResolvedPipelineTask) isFailure() bool {
 		atLeastOneFailed := false
 		for _, taskRun := range t.TaskRuns {
 			isDone = isDone && taskRun.IsDone()
-			taskRunFailed := taskRun.Status.GetCondition(apis.ConditionSucceeded).IsFalse() && !t.hasRemainingRetries()
+			taskRunFailed := taskRun.Status.GetCondition(apis.ConditionSucceeded).IsFalse()
 			atLeastOneFailed = atLeastOneFailed || taskRunFailed
 		}
 		return atLeastOneFailed && isDone
@@ -194,51 +195,35 @@ func (t ResolvedPipelineTask) isFailure() bool {
 		}
 		c = t.TaskRun.Status.GetCondition(apis.ConditionSucceeded)
 		isDone = t.TaskRun.IsDone()
+		return isDone && c.IsFalse()
 	}
-	return isDone && c.IsFalse() && !t.hasRemainingRetries()
 }
 
-// hasRemainingRetries returns true only when the number of retries already attempted
-// is less than the number of retries allowed.
-func (t ResolvedPipelineTask) hasRemainingRetries() bool {
-	var retriesDone int
+// isRunRetriable returns true only when the number of retries already attempted
+// is less than the number of retries allowed for v1alpha1.Run.
+//
+// This should be removed once v1alpha1.Run is fully deprecated.
+func (t ResolvedPipelineTask) isRunRetriable() bool {
 	switch {
-	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+	case t.IsMatrixed():
+		if len(t.RunObjects) == 0 {
 			return true
 		}
 		// has remaining retries when any Run has a remaining retry
-		for _, run := range t.Runs {
-			retriesDone = len(run.Status.RetriesStatus)
-			if retriesDone < t.PipelineTask.Retries {
-				return true
-			}
-		}
-		return false
-	case t.IsCustomTask():
-		if t.Run == nil {
-			return true
-		}
-		retriesDone = len(t.Run.Status.RetriesStatus)
-	case t.IsMatrixed():
-		if len(t.TaskRuns) == 0 {
-			return true
-		}
-		// has remaining retries when any TaskRun has a remaining retry
-		for _, taskRun := range t.TaskRuns {
-			retriesDone = len(taskRun.Status.RetriesStatus)
-			if retriesDone < t.PipelineTask.Retries {
-				return true
+		for _, run := range t.RunObjects {
+			if _, ok := run.(*v1alpha1.Run); ok {
+				if run.GetRetryCount() < t.PipelineTask.Retries {
+					return true
+				}
 			}
 		}
 		return false
 	default:
-		if t.TaskRun == nil {
-			return true
+		if _, ok := t.RunObject.(*v1alpha1.Run); ok {
+			return t.RunObject.GetRetryCount() < t.PipelineTask.Retries
 		}
-		retriesDone = len(t.TaskRun.Status.RetriesStatus)
 	}
-	return retriesDone < t.PipelineTask.Retries
+	return false
 }
 
 // isCancelledForTimeOut returns true only if the run is cancelled due to PipelineRun-controlled timeout
@@ -246,28 +231,28 @@ func (t ResolvedPipelineTask) hasRemainingRetries() bool {
 func (t ResolvedPipelineTask) isCancelledForTimeOut() bool {
 	switch {
 	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+		if len(t.RunObjects) == 0 {
 			return false
 		}
 		isDone := true
 		atLeastOneCancelled := false
-		for _, run := range t.Runs {
+		for _, run := range t.RunObjects {
 			isDone = isDone && run.IsDone()
-			c := run.Status.GetCondition(apis.ConditionSucceeded)
+			c := run.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
 			runCancelled := c.IsFalse() &&
-				c.Reason == v1alpha1.RunReasonCancelled &&
-				run.Spec.StatusMessage == v1alpha1.RunCancelledByPipelineTimeoutMsg
+				c.Reason == v1beta1.CustomRunReasonCancelled.String() &&
+				isRunOrCustomRunCancelledByPipelineRunTimeout(run)
 			atLeastOneCancelled = atLeastOneCancelled || runCancelled
 		}
 		return atLeastOneCancelled && isDone
 	case t.IsCustomTask():
-		if t.Run == nil {
+		if t.RunObject == nil {
 			return false
 		}
-		c := t.Run.Status.GetCondition(apis.ConditionSucceeded)
+		c := t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
 		return c != nil && c.IsFalse() &&
-			c.Reason == v1alpha1.RunReasonCancelled &&
-			t.Run.Spec.StatusMessage == v1alpha1.RunCancelledByPipelineTimeoutMsg
+			c.Reason == v1beta1.CustomRunReasonCancelled.String() &&
+			isRunOrCustomRunCancelledByPipelineRunTimeout(t.RunObject)
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
 			return false
@@ -299,24 +284,24 @@ func (t ResolvedPipelineTask) isCancelledForTimeOut() bool {
 func (t ResolvedPipelineTask) isCancelled() bool {
 	switch {
 	case t.IsCustomTask() && t.IsMatrixed():
-		if len(t.Runs) == 0 {
+		if len(t.RunObjects) == 0 {
 			return false
 		}
 		isDone := true
 		atLeastOneCancelled := false
-		for _, run := range t.Runs {
+		for _, run := range t.RunObjects {
 			isDone = isDone && run.IsDone()
-			c := run.Status.GetCondition(apis.ConditionSucceeded)
-			runCancelled := c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled
+			c := run.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
+			runCancelled := c.IsFalse() && c.Reason == v1beta1.CustomRunReasonCancelled.String()
 			atLeastOneCancelled = atLeastOneCancelled || runCancelled
 		}
 		return atLeastOneCancelled && isDone
 	case t.IsCustomTask():
-		if t.Run == nil {
+		if t.RunObject == nil {
 			return false
 		}
-		c := t.Run.Status.GetCondition(apis.ConditionSucceeded)
-		return c != nil && c.IsFalse() && c.Reason == v1alpha1.RunReasonCancelled
+		c := t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
+		return c != nil && c.IsFalse() && c.Reason == v1beta1.CustomRunReasonCancelled.String()
 	case t.IsMatrixed():
 		if len(t.TaskRuns) == 0 {
 			return false
@@ -343,7 +328,7 @@ func (t ResolvedPipelineTask) isCancelled() bool {
 // or Run associated.
 func (t ResolvedPipelineTask) isScheduled() bool {
 	if t.IsCustomTask() {
-		return t.Run != nil
+		return t.RunObject != nil
 	}
 	return t.TaskRun != nil
 }
@@ -352,8 +337,7 @@ func (t ResolvedPipelineTask) isScheduled() bool {
 // Run associated that has a Succeeded-type condition.
 func (t ResolvedPipelineTask) isStarted() bool {
 	if t.IsCustomTask() {
-		return t.Run != nil && t.Run.Status.GetCondition(apis.ConditionSucceeded) != nil
-
+		return t.RunObject != nil && t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded) != nil
 	}
 	return t.TaskRun != nil && t.TaskRun.Status.GetCondition(apis.ConditionSucceeded) != nil
 }
@@ -363,7 +347,7 @@ func (t ResolvedPipelineTask) isStarted() bool {
 func (t ResolvedPipelineTask) isConditionStatusFalse() bool {
 	if t.isStarted() {
 		if t.IsCustomTask() {
-			return t.Run.Status.GetCondition(apis.ConditionSucceeded).IsFalse()
+			return t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded).IsFalse()
 		}
 		return t.TaskRun.Status.GetCondition(apis.ConditionSucceeded).IsFalse()
 	}
@@ -555,11 +539,10 @@ func (t *ResolvedPipelineTask) IsFinallySkipped(facts *PipelineRunFacts) TaskSki
 		IsSkipped:      skippingReason != v1beta1.None,
 		SkippingReason: skippingReason,
 	}
-
 }
 
 // GetRun is a function that will retrieve a Run by name.
-type GetRun func(name string) (*v1alpha1.Run, error)
+type GetRun func(name string) (v1beta1.RunObject, error)
 
 // GetResourcesFromBindings will retrieve all Resources bound in PipelineRun pr and return a map
 // from the declared name of the PipelineResource (which is how the PipelineResource will
@@ -656,7 +639,7 @@ func isCustomTask(ctx context.Context, rpt ResolvedPipelineTask) bool {
 // ResolvePipelineTask retrieves a single Task's instance using the getTask to fetch
 // the spec. If it is unable to retrieve an instance of a referenced Task, it  will return
 // an error, otherwise it returns a list of all the Tasks retrieved.  It will retrieve
-// the Resources needed for the TaskRuns or Runs using the mapping of providedResources.
+// the Resources needed for the TaskRuns or RunObjects using the mapping of providedResources.
 func ResolvePipelineTask(
 	ctx context.Context,
 	pipelineRun v1beta1.PipelineRun,
@@ -672,23 +655,25 @@ func ResolvePipelineTask(
 	rpt.CustomTask = isCustomTask(ctx, rpt)
 	switch {
 	case rpt.IsCustomTask() && rpt.IsMatrixed():
-		rpt.RunNames = getNamesOfRuns(pipelineRun.Status.ChildReferences, pipelineTask.Name, pipelineRun.Name, pipelineTask.GetMatrixCombinationsCount())
-		for _, runName := range rpt.RunNames {
+		rpt.RunObjectNames = getNamesOfRuns(pipelineRun.Status.ChildReferences, pipelineTask.Name, pipelineRun.Name, pipelineTask.GetMatrixCombinationsCount())
+		for _, runName := range rpt.RunObjectNames {
 			run, err := getRun(runName)
 			if err != nil && !kerrors.IsNotFound(err) {
-				return nil, fmt.Errorf("error retrieving Run %s: %w", runName, err)
+				return nil, fmt.Errorf("error retrieving RunObject %s: %w", runName, err)
 			}
 			if run != nil {
-				rpt.Runs = append(rpt.Runs, run)
+				rpt.RunObjects = append(rpt.RunObjects, run)
 			}
 		}
 	case rpt.IsCustomTask():
-		rpt.RunName = getRunName(pipelineRun.Status.Runs, pipelineRun.Status.ChildReferences, pipelineTask.Name, pipelineRun.Name)
-		run, err := getRun(rpt.RunName)
+		rpt.RunObjectName = getRunName(pipelineRun.Status.Runs, pipelineRun.Status.ChildReferences, pipelineTask.Name, pipelineRun.Name)
+		run, err := getRun(rpt.RunObjectName)
 		if err != nil && !kerrors.IsNotFound(err) {
-			return nil, fmt.Errorf("error retrieving Run %s: %w", rpt.RunName, err)
+			return nil, fmt.Errorf("error retrieving RunObject %s: %w", rpt.RunObjectName, err)
 		}
-		rpt.Run = run
+		if run != nil {
+			rpt.RunObject = run
+		}
 	case rpt.IsMatrixed():
 		rpt.TaskRunNames = GetNamesOfTaskRuns(pipelineRun.Status.ChildReferences, pipelineTask.Name, pipelineRun.Name, pipelineTask.GetMatrixCombinationsCount())
 		for _, taskRunName := range rpt.TaskRunNames {
@@ -741,7 +726,6 @@ func (t *ResolvedPipelineTask) resolveTaskResources(
 	providedResources map[string]*resourcev1alpha1.PipelineResource,
 	taskRun *v1beta1.TaskRun,
 ) error {
-
 	spec, taskName, kind, err := resolveTask(ctx, taskRun, getTask, pipelineTask)
 	if err != nil {
 		return err
@@ -777,9 +761,13 @@ func resolveTask(
 			spec = *taskRun.Status.TaskSpec
 			taskName = pipelineTask.TaskRef.Name
 		} else {
-			t, err = getTask(ctx, pipelineTask.TaskRef.Name)
+			// Following minimum status principle (TEP-0100), no need to propagate the source about PipelineTask up to PipelineRun status.
+			// Instead, the child TaskRun's status will be the place recording the source of individual task.
+			t, _, err = getTask(ctx, pipelineTask.TaskRef.Name)
 			switch {
 			case errors.Is(err, remote.ErrorRequestInProgress):
+				return v1beta1.TaskSpec{}, "", "", err
+			case errors.Is(err, trustedresources.ErrorResourceVerificationFailed):
 				return v1beta1.TaskSpec{}, "", "", err
 			case err != nil:
 				return v1beta1.TaskSpec{}, "", "", &TaskNotFoundError{
@@ -846,8 +834,10 @@ func getNewTaskRunNames(ptName, prName string, combinationCount int) []string {
 // been defined, and the existing one otherwise.
 func getRunName(runsStatus map[string]*v1beta1.PipelineRunRunStatus, childRefs []v1beta1.ChildStatusReference, ptName, prName string) string {
 	for _, cr := range childRefs {
-		if cr.Kind == pipeline.RunControllerName && cr.PipelineTaskName == ptName {
-			return cr.Name
+		if cr.PipelineTaskName == ptName {
+			if cr.Kind == pipeline.CustomRunControllerName || cr.Kind == pipeline.RunControllerName {
+				return cr.Name
+			}
 		}
 	}
 
@@ -860,7 +850,7 @@ func getRunName(runsStatus map[string]*v1beta1.PipelineRunRunStatus, childRefs [
 	return kmeta.ChildName(prName, fmt.Sprintf("-%s", ptName))
 }
 
-// getNamesOfRuns should return a unique names for `Runs` if they have not already been defined,
+// getNamesOfRuns should return a unique names for `RunObjects` if they have not already been defined,
 // and the existing ones otherwise.
 func getNamesOfRuns(childRefs []v1beta1.ChildStatusReference, ptName, prName string, combinationCount int) []string {
 	if runNames := getRunNamesFromChildRefs(childRefs, ptName); runNames != nil {
@@ -872,8 +862,10 @@ func getNamesOfRuns(childRefs []v1beta1.ChildStatusReference, ptName, prName str
 func getRunNamesFromChildRefs(childRefs []v1beta1.ChildStatusReference, ptName string) []string {
 	var runNames []string
 	for _, cr := range childRefs {
-		if cr.Kind == pipeline.RunControllerName && cr.PipelineTaskName == ptName {
-			runNames = append(runNames, cr.Name)
+		if cr.PipelineTaskName == ptName {
+			if cr.Kind == pipeline.CustomRunControllerName || cr.Kind == pipeline.RunControllerName {
+				runNames = append(runNames, cr.Name)
+			}
 		}
 	}
 	return runNames
@@ -940,6 +932,16 @@ func (t *ResolvedPipelineTask) hasResultReferences() bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func isRunOrCustomRunCancelledByPipelineRunTimeout(ro v1beta1.RunObject) bool {
+	switch r := ro.(type) {
+	case *v1beta1.CustomRun:
+		return r.Spec.StatusMessage == v1beta1.CustomRunCancelledByPipelineTimeoutMsg
+	case *v1alpha1.Run:
+		return r.Spec.StatusMessage == v1alpha1.RunCancelledByPipelineTimeoutMsg
 	}
 	return false
 }

@@ -25,13 +25,16 @@ import (
 	"time"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/validate"
 	"github.com/tektoncd/pipeline/pkg/apis/version"
 	"github.com/tektoncd/pipeline/pkg/substitution"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"knative.dev/pkg/apis"
+	"knative.dev/pkg/webhook/resourcesemantics"
 )
 
 const (
@@ -46,14 +49,18 @@ const (
 )
 
 var _ apis.Validatable = (*Task)(nil)
+var _ resourcesemantics.VerbLimited = (*Task)(nil)
+
+// SupportedVerbs returns the operations that validation should be called for
+func (t *Task) SupportedVerbs() []admissionregistrationv1.OperationType {
+	return []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update}
+}
+
 var stringAndArrayVariableNameFormatRegex = regexp.MustCompile(stringAndArrayVariableNameFormat)
 var objectVariableNameFormatRegex = regexp.MustCompile(objectVariableNameFormat)
 
 // Validate implements apis.Validatable
 func (t *Task) Validate(ctx context.Context) *apis.FieldError {
-	if apis.IsInDelete(ctx) {
-		return nil
-	}
 	errs := validate.ObjectMetadata(t.GetObjectMeta()).ViaField("metadata")
 	ctx = config.SkipValidationDueToPropagatedParametersAndWorkspaces(ctx, false)
 	return errs.Also(t.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
@@ -86,12 +93,25 @@ func (ts *TaskSpec) Validate(ctx context.Context) (errs *apis.FieldError) {
 	}
 
 	errs = errs.Also(validateSteps(ctx, mergedSteps).ViaField("steps"))
+	errs = errs.Also(validateSidecarNames(ts.Sidecars))
 	errs = errs.Also(ts.Resources.Validate(ctx).ViaField("resources"))
 	errs = errs.Also(ValidateParameterTypes(ctx, ts.Params).ViaField("params"))
 	errs = errs.Also(ValidateParameterVariables(ctx, ts.Steps, ts.Params))
 	errs = errs.Also(ValidateResourcesVariables(ctx, ts.Steps, ts.Resources))
 	errs = errs.Also(validateTaskContextVariables(ctx, ts.Steps))
 	errs = errs.Also(validateResults(ctx, ts.Results).ViaField("results"))
+	return errs
+}
+
+func validateSidecarNames(sidecars []Sidecar) (errs *apis.FieldError) {
+	for _, sc := range sidecars {
+		if sc.Name == pipeline.ReservedResultsSidecarName {
+			errs = errs.Also(&apis.FieldError{
+				Message: fmt.Sprintf("Invalid: cannot use reserved sidecar name %v ", sc.Name),
+				Paths:   []string{"sidecars"},
+			})
+		}
+	}
 	return errs
 }
 
@@ -446,7 +466,6 @@ func validateStepObjectUsageAsWhole(step Step, prefix string, vars sets.String) 
 	}
 	for i, arg := range step.Args {
 		errs = errs.Also(validateTaskNoObjectReferenced(arg, prefix, vars).ViaFieldIndex("args", i))
-
 	}
 	for _, env := range step.Env {
 		errs = errs.Also(validateTaskNoObjectReferenced(env.Value, prefix, vars).ViaFieldKey("env", env.Name))
@@ -476,7 +495,6 @@ func validateStepArrayUsage(step Step, prefix string, vars sets.String) *apis.Fi
 	}
 	for i, arg := range step.Args {
 		errs = errs.Also(validateTaskArraysIsolated(arg, prefix, vars).ViaFieldIndex("args", i))
-
 	}
 	for _, env := range step.Env {
 		errs = errs.Also(validateTaskNoArrayReferenced(env.Value, prefix, vars).ViaFieldKey("env", env.Name))

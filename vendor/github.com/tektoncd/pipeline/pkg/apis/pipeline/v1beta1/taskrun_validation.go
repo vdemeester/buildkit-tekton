@@ -22,20 +22,27 @@ import (
 	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
+	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	"github.com/tektoncd/pipeline/pkg/apis/validate"
 	"github.com/tektoncd/pipeline/pkg/apis/version"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/strings/slices"
 	"knative.dev/pkg/apis"
+	"knative.dev/pkg/webhook/resourcesemantics"
 )
 
 var _ apis.Validatable = (*TaskRun)(nil)
+var _ resourcesemantics.VerbLimited = (*TaskRun)(nil)
+
+// SupportedVerbs returns the operations that validation should be called for
+func (tr *TaskRun) SupportedVerbs() []admissionregistrationv1.OperationType {
+	return []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update}
+}
 
 // Validate taskrun
 func (tr *TaskRun) Validate(ctx context.Context) *apis.FieldError {
-	if apis.IsInDelete(ctx) {
-		return nil
-	}
 	errs := validate.ObjectMetadata(tr.GetObjectMeta()).ViaField("metadata")
 	return errs.Also(tr.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
 }
@@ -100,7 +107,9 @@ func (ts *TaskRunSpec) Validate(ctx context.Context) (errs *apis.FieldError) {
 			errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("%s should be >= 0", ts.Timeout.Duration.String()), "timeout"))
 		}
 	}
-
+	if ts.PodTemplate != nil {
+		errs = errs.Also(validatePodTemplateEnv(ctx, *ts.PodTemplate))
+	}
 	return errs
 }
 
@@ -133,6 +142,19 @@ func (ts *TaskRunSpec) validateInlineParameters(ctx context.Context) (errs *apis
 	if ts.TaskSpec != nil && ts.TaskSpec.Steps != nil {
 		errs = errs.Also(ValidateParameterTypes(ctx, paramSpec))
 		errs = errs.Also(ValidateParameterVariables(config.SkipValidationDueToPropagatedParametersAndWorkspaces(ctx, false), ts.TaskSpec.Steps, paramSpec))
+	}
+	return errs
+}
+
+func validatePodTemplateEnv(ctx context.Context, podTemplate pod.Template) (errs *apis.FieldError) {
+	forbiddenEnvsConfigured := config.FromContextOrDefaults(ctx).Defaults.DefaultForbiddenEnv
+	if len(forbiddenEnvsConfigured) == 0 {
+		return errs
+	}
+	for _, pEnv := range podTemplate.Env {
+		if slices.Contains(forbiddenEnvsConfigured, pEnv.Name) {
+			errs = errs.Also(apis.ErrInvalidValue("PodTemplate cannot update a forbidden env: "+pEnv.Name, "PodTemplate.Env"))
+		}
 	}
 	return errs
 }

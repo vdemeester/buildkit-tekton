@@ -5,7 +5,7 @@ go 1.18
 replace github.com/docker/docker => github.com/docker/docker v20.10.3-0.20220121014307-40bb9831756f+incompatible
 
 require (
-	github.com/docker/cli v20.10.21+incompatible
+	github.com/docker/cli v20.10.23+incompatible
 	github.com/docker/distribution v2.8.1+incompatible
 	github.com/google/go-cmp v0.5.9
 	// github.com/moby/buildkit v0.10.4

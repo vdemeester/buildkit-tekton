@@ -119,7 +119,6 @@ func InitializeArtifactStorage(ctx context.Context, images pipeline.Images, pr *
 // CleanupArtifactStorage will delete the PipelineRun's artifact storage PVC if it exists. The PVC is created for using
 // an output workspace or artifacts from one Task to another Task. No other PVCs will be impacted by this cleanup.
 func CleanupArtifactStorage(ctx context.Context, pr *v1beta1.PipelineRun, c kubernetes.Interface) error {
-
 	if needsPVC(ctx) {
 		err := deletePVC(ctx, pr, c)
 		if err != nil {
@@ -129,7 +128,7 @@ func CleanupArtifactStorage(ctx context.Context, pr *v1beta1.PipelineRun, c kube
 	return nil
 }
 
-// needsPVC checks if the Tekton is is configured to use a bucket for artifact storage,
+// needsPVC checks if the Tekton is configured to use a bucket for artifact storage,
 // returning true if instead a PVC is needed.
 func needsPVC(ctx context.Context) bool {
 	bucketConfig := config.FromContextOrDefaults(ctx).ArtifactBucket

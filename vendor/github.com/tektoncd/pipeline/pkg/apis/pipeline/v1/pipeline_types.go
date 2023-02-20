@@ -260,7 +260,7 @@ func (pt PipelineTask) validateTask(ctx context.Context) (errs *apis.FieldError)
 		} else if pt.TaskRef.Resolver == "" {
 			errs = errs.Also(apis.ErrInvalidValue("taskRef must specify name", "taskRef.name"))
 		}
-		if cfg.FeatureFlags.EnableAPIFields != config.AlphaAPIFields {
+		if cfg.FeatureFlags.EnableAPIFields != config.BetaAPIFields && cfg.FeatureFlags.EnableAPIFields != config.AlphaAPIFields {
 			// fail if resolver or resource are present when enable-api-fields is false.
 			if pt.TaskRef.Resolver != "" {
 				errs = errs.Also(apis.ErrDisallowedFields("taskref.resolver"))
@@ -283,9 +283,6 @@ func (pt *PipelineTask) validateMatrix(ctx context.Context) (errs *apis.FieldErr
 		// This is an alpha feature and will fail validation if it's used in a pipeline spec
 		// when the enable-api-fields feature gate is anything but "alpha".
 		errs = errs.Also(version.ValidateEnabledAPIFields(ctx, "matrix", config.AlphaAPIFields))
-		// Matrix requires "embedded-status" feature gate to be set to "minimal", and will fail
-		// validation if it is anything but "minimal".
-		errs = errs.Also(ValidateEmbeddedStatus(ctx, "matrix", config.MinimalEmbeddedStatus))
 		errs = errs.Also(pt.validateMatrixCombinationsCount(ctx))
 	}
 	errs = errs.Also(validateParameterInOneOfMatrixOrParams(pt.Matrix, pt.Params))
@@ -420,7 +417,13 @@ func validateExecutionStatusVariablesExpressions(expressions []string, ptNames s
 }
 
 func (pt *PipelineTask) validateWorkspaces(workspaceNames sets.String) (errs *apis.FieldError) {
+	workspaceBindingNames := sets.NewString()
 	for i, ws := range pt.Workspaces {
+		if workspaceBindingNames.Has(ws.Name) {
+			errs = errs.Also(apis.ErrGeneric(
+				fmt.Sprintf("workspace name %q must be unique", ws.Name), "").ViaFieldIndex("workspaces", i))
+		}
+
 		if ws.Workspace == "" {
 			if !workspaceNames.Has(ws.Name) {
 				errs = errs.Also(apis.ErrInvalidValue(
@@ -434,6 +437,8 @@ func (pt *PipelineTask) validateWorkspaces(workspaceNames sets.String) (errs *ap
 				"",
 			).ViaFieldIndex("workspaces", i))
 		}
+
+		workspaceBindingNames.Insert(ws.Name)
 	}
 	return errs
 }
@@ -468,13 +473,11 @@ func (pt PipelineTask) Validate(ctx context.Context) (errs *apis.FieldError) {
 
 	errs = errs.Also(pt.validateEmbeddedOrType())
 
-	cfg := config.FromContextOrDefaults(ctx)
-	// If EnableCustomTasks feature flag is on, validate custom task specifications
-	// pipeline task having taskRef with APIVersion is classified as custom task
+	// Pipeline task having taskRef/taskSpec with APIVersion is classified as custom task
 	switch {
-	case cfg.FeatureFlags.EnableCustomTasks && pt.TaskRef != nil && pt.TaskRef.APIVersion != "":
+	case pt.TaskRef != nil && pt.TaskRef.APIVersion != "":
 		errs = errs.Also(pt.validateCustomTask())
-	case cfg.FeatureFlags.EnableCustomTasks && pt.TaskSpec != nil && pt.TaskSpec.APIVersion != "":
+	case pt.TaskSpec != nil && pt.TaskSpec.APIVersion != "":
 		errs = errs.Also(pt.validateCustomTask())
 	default:
 		errs = errs.Also(pt.validateTask(ctx))

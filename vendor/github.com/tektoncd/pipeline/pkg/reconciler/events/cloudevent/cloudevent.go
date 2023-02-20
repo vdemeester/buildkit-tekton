@@ -72,14 +72,31 @@ const (
 	RunSuccessfulEventV1 TektonEventType = "dev.tekton.event.run.successful.v1"
 	// RunFailedEventV1 is sent for Runs with "ConditionSucceeded" "False"
 	RunFailedEventV1 TektonEventType = "dev.tekton.event.run.failed.v1"
+	// CustomRunStartedEventV1 is sent for CustomRuns with "ConditionSucceeded" "Unknown"
+	// the first time they are picked up by the reconciler
+	CustomRunStartedEventV1 TektonEventType = "dev.tekton.event.customrun.started.v1"
+	// CustomRunRunningEventV1 is sent for CustomRuns with "ConditionSucceeded" "Unknown"
+	// once the CustomRun is validated and Pod created
+	CustomRunRunningEventV1 TektonEventType = "dev.tekton.event.customrun.running.v1"
+	// CustomRunSuccessfulEventV1 is sent for CustomRuns with "ConditionSucceeded" "True"
+	CustomRunSuccessfulEventV1 TektonEventType = "dev.tekton.event.customrun.successful.v1"
+	// CustomRunFailedEventV1 is sent for CustomRuns with "ConditionSucceeded" "False"
+	CustomRunFailedEventV1 TektonEventType = "dev.tekton.event.customrun.failed.v1"
 )
 
 func (t TektonEventType) String() string {
 	return string(t)
 }
 
-// CEClient matches the `Client` interface from github.com/cloudevents/sdk-go/v2/cloudevents
-type CEClient cloudevents.Client
+// CEClient wraps the `Client` interface from github.com/cloudevents/sdk-go/v2/cloudevents
+// and has methods to count the cloud events being sent, those methods are for testing purposes.
+type CEClient interface {
+	cloudevents.Client
+	// addCount increments the count of events to be sent
+	addCount()
+	// decreaseCount decrements the count of events to be sent, indicating the event has been sent
+	decreaseCount()
+}
 
 // TektonCloudEventData type is used to marshal and unmarshal the payload of
 // a Tekton cloud event. It can include a TaskRun or a PipelineRun
@@ -87,6 +104,7 @@ type TektonCloudEventData struct {
 	TaskRun     *v1beta1.TaskRun     `json:"taskRun,omitempty"`
 	PipelineRun *v1beta1.PipelineRun `json:"pipelineRun,omitempty"`
 	Run         *v1alpha1.Run        `json:"run,omitempty"`
+	CustomRun   *v1beta1.CustomRun   `json:"customRun,omitempty"`
 }
 
 // newTektonCloudEventData returns a new instance of TektonCloudEventData
@@ -99,6 +117,8 @@ func newTektonCloudEventData(runObject objectWithCondition) TektonCloudEventData
 		tektonCloudEventData.PipelineRun = v
 	case *v1alpha1.Run:
 		tektonCloudEventData.Run = v
+	case *v1beta1.CustomRun:
+		tektonCloudEventData.CustomRun = v
 	}
 	return tektonCloudEventData
 }
@@ -126,7 +146,7 @@ func eventForObjectWithCondition(runObject objectWithCondition) (*cloudevents.Ev
 		return nil, err
 	}
 	if eventType == nil {
-		return nil, errors.New("No matching event type found")
+		return nil, errors.New("no matching event type found")
 	}
 	event.SetType(eventType.String())
 
@@ -134,36 +154,6 @@ func eventForObjectWithCondition(runObject objectWithCondition) (*cloudevents.Ev
 		return nil, err
 	}
 	return &event, nil
-}
-
-// eventForTaskRun will create a new event based on a TaskRun,
-// or return an error if not possible.
-func eventForTaskRun(taskRun *v1beta1.TaskRun) (*cloudevents.Event, error) {
-	// Check if the TaskRun is defined
-	if taskRun == nil {
-		return nil, errors.New("Cannot send an event for an empty TaskRun")
-	}
-	return eventForObjectWithCondition(taskRun)
-}
-
-// eventForPipelineRun will create a new event based on a PipelineRun,
-// or return an error if not possible.
-func eventForPipelineRun(pipelineRun *v1beta1.PipelineRun) (*cloudevents.Event, error) {
-	// Check if the TaskRun is defined
-	if pipelineRun == nil {
-		return nil, errors.New("Cannot send an event for an empty PipelineRun")
-	}
-	return eventForObjectWithCondition(pipelineRun)
-}
-
-// eventForRun will create a new event based on a Run, or return an error if
-// not possible.
-func eventForRun(run *v1alpha1.Run) (*cloudevents.Event, error) {
-	// Check if the Run is defined
-	if run == nil {
-		return nil, errors.New("Cannot send an event for an empty Run")
-	}
-	return eventForObjectWithCondition(run)
 }
 
 func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
@@ -176,6 +166,9 @@ func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
 		switch runObject.(type) {
 		case *v1alpha1.Run:
 			eventType = RunStartedEventV1
+			return &eventType, nil
+		case *v1beta1.CustomRun:
+			eventType = CustomRunStartedEventV1
 			return &eventType, nil
 		default:
 			return nil, fmt.Errorf("no condition for ConditionSucceeded in %T", runObject)
@@ -207,6 +200,11 @@ func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
 			// so we cannot make many assumptions here. If a condition is set
 			// to unknown (not finished), we sent the running event
 			eventType = RunRunningEventV1
+		case *v1beta1.CustomRun:
+			// CustomRun controller have the freedom of setting reasons as they wish
+			// so we cannot make many assumptions here. If a condition is set
+			// to unknown (not finished), we sent the running event
+			eventType = CustomRunRunningEventV1
 		}
 	case c.IsFalse():
 		switch runObject.(type) {
@@ -216,6 +214,8 @@ func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
 			eventType = PipelineRunFailedEventV1
 		case *v1alpha1.Run:
 			eventType = RunFailedEventV1
+		case *v1beta1.CustomRun:
+			eventType = CustomRunFailedEventV1
 		}
 	case c.IsTrue():
 		switch runObject.(type) {
@@ -225,6 +225,8 @@ func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
 			eventType = PipelineRunSuccessfulEventV1
 		case *v1alpha1.Run:
 			eventType = RunSuccessfulEventV1
+		case *v1beta1.CustomRun:
+			eventType = CustomRunSuccessfulEventV1
 		}
 	default:
 		return nil, fmt.Errorf("unknown condition for in %T.Status %s", runObject, c.Status)

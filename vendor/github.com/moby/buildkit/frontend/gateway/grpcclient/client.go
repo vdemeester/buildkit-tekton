@@ -161,7 +161,7 @@ func (c *grpcClient) Run(ctx context.Context, f client.BuildFunc) (retError erro
 					}
 				}
 
-				if res.Attestations != nil && c.caps.Supports(pb.CapAttestations) == nil {
+				if res.Attestations != nil {
 					attestations := map[string]*pb.Attestations{}
 					for k, as := range res.Attestations {
 						for _, a := range as {
@@ -170,6 +170,12 @@ func (c *grpcClient) Run(ctx context.Context, f client.BuildFunc) (retError erro
 								retError = err
 								continue
 							}
+							pbRef, err := convertRef(a.Ref)
+							if err != nil {
+								retError = err
+								continue
+							}
+							pbAtt.Ref = pbRef
 							if attestations[k] == nil {
 								attestations[k] = &pb.Attestations{}
 							}
@@ -376,6 +382,7 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		AllowResultReturn:   true,
 		AllowResultArrayRef: true,
 		CacheImports:        cacheImports,
+		SourcePolicies:      creq.SourcePolicies,
 	}
 
 	// backwards compatibility with inline return
@@ -387,30 +394,15 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		if c.caps.Supports(pb.CapGatewayEvaluateSolve) == nil {
 			req.Evaluate = creq.Evaluate
 		} else {
-			// If evaluate is not supported, fallback to running Stat(".") in order to
-			// trigger an evaluation of the result.
+			// If evaluate is not supported, fallback to running Stat(".") in
+			// order to trigger an evaluation of the result.
 			defer func() {
 				if res == nil {
 					return
 				}
-
-				var (
-					id  string
-					ref client.Reference
-				)
-				ref, err = res.SingleRef()
-				if err != nil {
-					for refID := range res.Refs {
-						id = refID
-						break
-					}
-				} else {
-					id = ref.(*reference).id
-				}
-
-				_, err = c.client.StatFile(ctx, &pb.StatFileRequest{
-					Ref:  id,
-					Path: ".",
+				err = res.EachRef(func(ref client.Reference) error {
+					_, err := ref.StatFile(ctx, client.StatRequest{Path: "."})
+					return err
 				})
 			}()
 		}
@@ -466,11 +458,18 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		if resp.Result.Attestations != nil {
 			for p, as := range resp.Result.Attestations {
 				for _, a := range as.Attestation {
-					att, err := client.AttestationFromPB(a)
+					att, err := client.AttestationFromPB[client.Reference](a)
 					if err != nil {
 						return nil, err
 					}
-					res.AddAttestation(p, *att, nil)
+					if a.Ref.Id != "" {
+						ref, err := newReference(c, a.Ref)
+						if err != nil {
+							return nil, err
+						}
+						att.Ref = ref
+					}
+					res.AddAttestation(p, *att)
 				}
 			}
 		}
@@ -490,7 +489,15 @@ func (c *grpcClient) ResolveImageConfig(ctx context.Context, ref string, opt llb
 			OSFeatures:   platform.OSFeatures,
 		}
 	}
-	resp, err := c.client.ResolveImageConfig(ctx, &pb.ResolveImageConfigRequest{Ref: ref, Platform: p, ResolveMode: opt.ResolveMode, LogName: opt.LogName, ResolverType: int32(opt.ResolverType), SessionID: opt.SessionID})
+	resp, err := c.client.ResolveImageConfig(ctx, &pb.ResolveImageConfigRequest{
+		ResolverType: int32(opt.ResolverType),
+		Ref:          ref,
+		Platform:     p,
+		ResolveMode:  opt.ResolveMode,
+		LogName:      opt.LogName,
+		SessionID:    opt.Store.SessionID,
+		StoreID:      opt.Store.StoreID,
+	})
 	if err != nil {
 		return "", nil, err
 	}
@@ -824,6 +831,7 @@ func (ctr *container) Start(ctx context.Context, req client.StartRequest) (clien
 		Tty:      req.Tty,
 		Security: req.SecurityMode,
 	}
+	init.Meta.RemoveMountStubsRecursive = req.RemoveMountStubsRecursive
 	if req.Stdin != nil {
 		init.Fds = append(init.Fds, 0)
 	}
@@ -1052,6 +1060,15 @@ func (r *reference) ToState() (st llb.State, err error) {
 	}
 
 	return llb.NewState(defop), nil
+}
+
+func (r *reference) Evaluate(ctx context.Context) error {
+	req := &pb.EvaluateRequest{Ref: r.id}
+	_, err := r.c.client.Evaluate(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *reference) ReadFile(ctx context.Context, req client.ReadRequest) ([]byte, error) {

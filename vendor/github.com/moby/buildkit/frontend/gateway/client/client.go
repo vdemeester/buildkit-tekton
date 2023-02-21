@@ -8,6 +8,7 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/solver/result"
+	spb "github.com/moby/buildkit/sourcepolicy/pb"
 	"github.com/moby/buildkit/util/apicaps"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
@@ -15,6 +16,8 @@ import (
 )
 
 type Result = result.Result[Reference]
+
+type Attestation = result.Attestation[Reference]
 
 type BuildFunc func(context.Context, Client) (*Result, error)
 
@@ -73,6 +76,8 @@ type StartRequest struct {
 	Stdin          io.ReadCloser
 	Stdout, Stderr io.WriteCloser
 	SecurityMode   pb.SecurityMode
+
+	RemoveMountStubsRecursive bool
 }
 
 // WinSize is same as executor.WinSize, copied here to prevent circular package
@@ -91,6 +96,7 @@ type ContainerProcess interface {
 
 type Reference interface {
 	ToState() (llb.State, error)
+	Evaluate(ctx context.Context) error
 	ReadFile(ctx context.Context, req ReadRequest) ([]byte, error)
 	StatFile(ctx context.Context, req StatRequest) (*fstypes.Stat, error)
 	ReadDir(ctx context.Context, req ReadDirRequest) ([]*fstypes.Stat, error)
@@ -123,6 +129,7 @@ type SolveRequest struct {
 	FrontendOpt    map[string]string
 	FrontendInputs map[string]*pb.Definition
 	CacheImports   []CacheOptionsEntry
+	SourcePolicies []*spb.Policy
 }
 
 type CacheOptionsEntry struct {

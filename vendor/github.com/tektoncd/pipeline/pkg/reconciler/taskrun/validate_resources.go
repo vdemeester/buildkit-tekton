@@ -19,6 +19,8 @@ package taskrun
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
@@ -81,9 +83,6 @@ func validateParams(ctx context.Context, paramSpecs []v1beta1.ParamSpec, params 
 	if missingParamsNames := missingParamsNames(neededParamsNames, providedParamsNames, paramSpecs); len(missingParamsNames) != 0 {
 		return fmt.Errorf("missing values for these params which have no default values: %s", missingParamsNames)
 	}
-	if extraParamsNames := extraParamsNames(ctx, neededParamsNames, providedParamsNames); len(extraParamsNames) != 0 {
-		return fmt.Errorf("didn't need these params but they were provided anyway: %s", extraParamsNames)
-	}
 	if wrongTypeParamNames := wrongTypeParamsNames(params, matrixParams, neededParamsTypes); len(wrongTypeParamNames) != 0 {
 		return fmt.Errorf("param types don't match the user-specified type: %s", wrongTypeParamNames)
 	}
@@ -124,18 +123,6 @@ func missingParamsNames(neededParams []string, providedParams []string, paramSpe
 		}
 	}
 	return missingParamsNamesWithNoDefaults
-}
-
-func extraParamsNames(ctx context.Context, neededParams []string, providedParams []string) []string {
-	// If alpha features are enabled, disable checking for extra params.
-	// Extra params are needed to support
-	// https://github.com/tektoncd/community/blob/main/teps/0023-implicit-mapping.md
-	// So that parent params can be passed down to subresources (even if they
-	// are not explicitly used).
-	if config.FromContextOrDefaults(ctx).FeatureFlags.EnableAPIFields != "alpha" {
-		return list.DiffLeft(providedParams, neededParams)
-	}
-	return nil
 }
 
 func wrongTypeParamsNames(params []v1beta1.Param, matrix []v1beta1.Param, neededParamsTypes map[string]v1beta1.ParamType) []string {
@@ -259,9 +246,7 @@ func validateTaskSpecRequestResources(taskSpec *v1beta1.TaskSpec) error {
 							return fmt.Errorf("Invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
 						}
 					}
-
 				}
-
 			}
 		}
 	}
@@ -317,7 +302,12 @@ func validateTaskRunResults(tr *v1beta1.TaskRun, resolvedTaskSpec *v1beta1.TaskS
 
 	// When get the results, check if the type of result is the expected one
 	if missmatchedTypes := mismatchedTypesResults(tr, specResults); len(missmatchedTypes) != 0 {
-		return fmt.Errorf("missmatched Types for these results, %v", missmatchedTypes)
+		var s []string
+		for k, v := range missmatchedTypes {
+			s = append(s, fmt.Sprintf(" \"%v\": %v", k, v))
+		}
+		sort.Strings(s)
+		return fmt.Errorf("Provided results don't match declared results; may be invalid JSON or missing result declaration: %v", strings.Join(s, ","))
 	}
 
 	// When get the results, for object value need to check if they have missing keys.
@@ -328,19 +318,28 @@ func validateTaskRunResults(tr *v1beta1.TaskRun, resolvedTaskSpec *v1beta1.TaskS
 }
 
 // mismatchedTypesResults checks and returns all the mismatched types of emitted results against specified results.
-func mismatchedTypesResults(tr *v1beta1.TaskRun, specResults []v1beta1.TaskResult) map[string][]string {
-	neededTypes := make(map[string][]string)
-	providedTypes := make(map[string][]string)
-	// collect needed keys for object results
+func mismatchedTypesResults(tr *v1beta1.TaskRun, specResults []v1beta1.TaskResult) map[string]string {
+	neededTypes := make(map[string]string)
+	mismatchedTypes := make(map[string]string)
+	var filteredResults []v1beta1.TaskRunResult
+	// collect needed types for results
 	for _, r := range specResults {
-		neededTypes[r.Name] = append(neededTypes[r.Name], string(r.Type))
+		neededTypes[r.Name] = string(r.Type)
 	}
 
-	// collect provided keys for object results
+	// collect mismatched types for results, and correct results in filteredResults
+	// TODO(#6097): Validate if the emitted results are defined in taskspec
 	for _, trr := range tr.Status.TaskRunResults {
-		providedTypes[trr.Name] = append(providedTypes[trr.Name], string(trr.Type))
+		needed, ok := neededTypes[trr.Name]
+		if ok && needed != string(trr.Type) {
+			mismatchedTypes[trr.Name] = fmt.Sprintf("task result is expected to be \"%v\" type but was initialized to a different type \"%v\"", needed, trr.Type)
+		} else {
+			filteredResults = append(filteredResults, trr)
+		}
 	}
-	return findMissingKeys(neededTypes, providedTypes)
+	// remove the mismatched results
+	tr.Status.TaskRunResults = filteredResults
+	return mismatchedTypes
 }
 
 // missingKeysofObjectResults checks and returns the missing keys of object results.
@@ -548,7 +547,6 @@ func validateContainerParamArrayIndexing(c *corev1.Container, arrayParams map[st
 		}
 		if e.SecretRef != nil {
 			extractParamIndex(e.SecretRef.LocalObjectReference.Name, arrayParams, outofBoundParams)
-
 		}
 	}
 

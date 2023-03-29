@@ -40,6 +40,8 @@ import (
 	"knative.dev/pkg/metrics"
 )
 
+const anonymous = "anonymous"
+
 var (
 	pipelinerunTag = tag.MustNewKey("pipelinerun")
 	pipelineTag    = tag.MustNewKey("pipeline")
@@ -101,9 +103,9 @@ type Recorder struct {
 // initializes this singleton and returns the same recorder across any
 // subsequent invocations.
 var (
-	once        sync.Once
-	r           *Recorder
-	recorderErr error
+	once           sync.Once
+	r              *Recorder
+	errRegistering error
 )
 
 // NewRecorder creates a new metrics recorder instance
@@ -119,22 +121,21 @@ func NewRecorder(ctx context.Context) (*Recorder, error) {
 
 		cfg := config.FromContextOrDefaults(ctx)
 
-		recorderErr = viewRegister(cfg.Metrics)
-		if recorderErr != nil {
+		errRegistering = viewRegister(cfg.Metrics)
+		if errRegistering != nil {
 			r.initialized = false
 			return
 		}
 	})
 
-	return r, recorderErr
+	return r, errRegistering
 }
 
 func viewRegister(cfg *config.Metrics) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	prunTag := []tag.Key{}
-	trunTag := []tag.Key{}
+	var prunTag []tag.Key
 	switch cfg.PipelinerunLevel {
 	case config.PipelinerunLevelAtPipelinerun:
 		prunTag = []tag.Key{pipelineTag, pipelinerunTag}
@@ -149,6 +150,7 @@ func viewRegister(cfg *config.Metrics) error {
 		return errors.New("invalid config for PipelinerunLevel: " + cfg.PipelinerunLevel)
 	}
 
+	var trunTag []tag.Key
 	switch cfg.TaskrunLevel {
 	case config.TaskrunLevelAtTaskrun:
 		trunTag = []tag.Key{taskTag, taskrunTag}
@@ -297,7 +299,7 @@ func (r *Recorder) DurationAndCount(ctx context.Context, tr *v1beta1.TaskRun, be
 		duration = tr.Status.CompletionTime.Sub(tr.Status.StartTime.Time)
 	}
 
-	taskName := "anonymous"
+	taskName := anonymous
 	if tr.Spec.TaskRef != nil {
 		taskName = tr.Spec.TaskRef.Name
 	}
@@ -409,7 +411,7 @@ func (r *Recorder) RecordPodLatency(ctx context.Context, pod *corev1.Pod, tr *v1
 	}
 
 	latency := scheduledTime.Sub(pod.CreationTimestamp.Time)
-	taskName := "anonymous"
+	taskName := anonymous
 	if tr.Spec.TaskRef != nil {
 		taskName = tr.Spec.TaskRef.Name
 	}
@@ -438,7 +440,7 @@ func (r *Recorder) CloudEvents(ctx context.Context, tr *v1beta1.TaskRun) error {
 		return fmt.Errorf("ignoring the metrics recording for %s , failed to initialize the metrics recorder", tr.Name)
 	}
 
-	taskName := "anonymous"
+	taskName := anonymous
 	if tr.Spec.TaskRef != nil {
 		taskName = tr.Spec.TaskRef.Name
 	}

@@ -22,15 +22,14 @@ import (
 	"path/filepath"
 	"strconv"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
-
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/container"
 	"github.com/tektoncd/pipeline/pkg/pod"
 	"github.com/tektoncd/pipeline/pkg/substitution"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -124,37 +123,6 @@ func paramsFromTaskRun(ctx context.Context, tr *v1beta1.TaskRun) (map[string]str
 	}
 
 	return stringReplacements, arrayReplacements
-}
-
-// ApplyResources applies the substitution from values in resources which are referenced in spec as subitems
-// of the replacementStr.
-func ApplyResources(spec *v1beta1.TaskSpec, resolvedResources map[string]v1beta1.PipelineResourceInterface, replacementStr string) *v1beta1.TaskSpec {
-	replacements := map[string]string{}
-	for name, r := range resolvedResources {
-		for k, v := range r.Replacements() {
-			replacements[fmt.Sprintf("resources.%s.%s.%s", replacementStr, name, k)] = v
-			// FIXME(vdemeester) Remove that with deprecating v1beta1
-			replacements[fmt.Sprintf("%s.resources.%s.%s", replacementStr, name, k)] = v
-		}
-	}
-
-	// We always add replacements for 'path'
-	if spec.Resources != nil && spec.Resources.Inputs != nil {
-		for _, r := range spec.Resources.Inputs {
-			replacements[fmt.Sprintf("resources.inputs.%s.path", r.Name)] = v1beta1.InputResourcePath(r.ResourceDeclaration)
-			// FIXME(vdemeester) Remove that with deprecating v1beta1
-			replacements[fmt.Sprintf("inputs.resources.%s.path", r.Name)] = v1beta1.InputResourcePath(r.ResourceDeclaration)
-		}
-	}
-	if spec.Resources != nil && spec.Resources.Outputs != nil {
-		for _, r := range spec.Resources.Outputs {
-			replacements[fmt.Sprintf("resources.outputs.%s.path", r.Name)] = v1beta1.OutputResourcePath(r.ResourceDeclaration)
-			// FIXME(vdemeester) Remove that with deprecating v1beta1
-			replacements[fmt.Sprintf("outputs.resources.%s.path", r.Name)] = v1beta1.OutputResourcePath(r.ResourceDeclaration)
-		}
-	}
-
-	return ApplyReplacements(spec, replacements, map[string][]string{})
 }
 
 func getContextReplacements(taskName string, tr *v1beta1.TaskRun) map[string]string {

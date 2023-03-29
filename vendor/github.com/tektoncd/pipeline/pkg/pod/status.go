@@ -81,7 +81,10 @@ const (
 	timeFormat = "2006-01-02T15:04:05.000Z07:00"
 )
 
-const oomKilled = "OOMKilled"
+const (
+	oomKilled = "OOMKilled"
+	evicted   = "Evicted"
+)
 
 // SidecarsReady returns true if all of the Pod's sidecars are Ready or
 // Terminated.
@@ -266,7 +269,7 @@ func filterResultsAndResources(results []v1beta1.PipelineResourceResult, specRes
 	for _, r := range results {
 		switch r.ResultType {
 		case v1beta1.TaskRunResultType:
-			taskRunResult := v1beta1.TaskRunResult{}
+			var taskRunResult v1beta1.TaskRunResult
 			if neededTypes[r.Key] == v1beta1.ResultsTypeString {
 				taskRunResult = v1beta1.TaskRunResult{
 					Name:  r.Key,
@@ -290,8 +293,6 @@ func filterResultsAndResources(results []v1beta1.PipelineResourceResult, specRes
 		case v1beta1.InternalTektonResultType:
 			// Internal messages are ignored because they're not used as external result
 			continue
-		case v1beta1.PipelineResourceResultType:
-			fallthrough
 		default:
 			pipelineResourceResults = append(pipelineResourceResults, r)
 			filteredResults = append(filteredResults, r)
@@ -420,6 +421,14 @@ func areStepsComplete(pod *corev1.Pod) bool {
 }
 
 func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
+	// If a pod was evicted, use the pods status message before trying to
+	// determine a failure message from the pod's container statuses. A
+	// container may have a generic exit code that contains less information,
+	// such as an exit code and message related to not being located.
+	if pod.Status.Reason == evicted {
+		return pod.Status.Message
+	}
+
 	// First, try to surface an error about the actual init container that failed.
 	for _, status := range pod.Status.InitContainerStatuses {
 		if msg := extractContainerFailureMessage(logger, status, pod.ObjectMeta); len(msg) > 0 {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
@@ -36,7 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/kmeta"
-	"knative.dev/pkg/logging"
 )
 
 // This error is defined in etcd at
@@ -60,12 +60,12 @@ func GetTaskKind(taskrun *v1beta1.TaskRun) v1beta1.TaskKind {
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 func GetTaskFuncFromTaskRun(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester, taskrun *v1beta1.TaskRun, verificationpolicies []*v1alpha1.VerificationPolicy) GetTask {
 	// if the spec is already in the status, do not try to fetch it again, just use it as source of truth.
-	// Same for the Source field in the Status.Provenance.
+	// Same for the RefSource field in the Status.Provenance.
 	if taskrun.Status.TaskSpec != nil {
-		return func(_ context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
-			var configsource *v1beta1.ConfigSource
+		return func(_ context.Context, name string) (*v1beta1.Task, *v1beta1.RefSource, error) {
+			var refSource *v1beta1.RefSource
 			if taskrun.Status.Provenance != nil {
-				configsource = taskrun.Status.Provenance.ConfigSource
+				refSource = taskrun.Status.Provenance.RefSource
 			}
 			return &v1beta1.Task{
 				ObjectMeta: metav1.ObjectMeta{
@@ -73,37 +73,29 @@ func GetTaskFuncFromTaskRun(ctx context.Context, k8s kubernetes.Interface, tekto
 					Namespace: taskrun.Namespace,
 				},
 				Spec: *taskrun.Status.TaskSpec,
-			}, configsource, nil
+			}, refSource, nil
 		}
 	}
 	return GetVerifiedTaskFunc(ctx, k8s, tekton, requester, taskrun, taskrun.Spec.TaskRef, taskrun.Name, taskrun.Namespace, taskrun.Spec.ServiceAccountName, verificationpolicies)
 }
 
-// GetVerifiedTaskFunc is a wrapper of GetTaskFunc and return the function to
-// verify the task if resource-verification-mode is not "skip"
+// GetVerifiedTaskFunc is a wrapper of GetTaskFunc and return the function to verify the task
+// if there are matching verification policies
 func GetVerifiedTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester,
 	owner kmeta.OwnerRefable, taskref *v1beta1.TaskRef, trName string, namespace, saName string, verificationpolicies []*v1alpha1.VerificationPolicy) GetTask {
 	get := GetTaskFunc(ctx, k8s, tekton, requester, owner, taskref, trName, namespace, saName)
 
-	return func(context.Context, string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
+	return func(context.Context, string) (*v1beta1.Task, *v1beta1.RefSource, error) {
 		t, s, err := get(ctx, taskref.Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get task: %w", err)
 		}
-		var source string
+		var refSource string
 		if s != nil {
-			source = s.URI
+			refSource = s.URI
 		}
-		logger := logging.FromContext(ctx)
-		if config.CheckEnforceResourceVerificationMode(ctx) || config.CheckWarnResourceVerificationMode(ctx) {
-			if err := trustedresources.VerifyTask(ctx, t, k8s, source, verificationpolicies); err != nil {
-				if config.CheckEnforceResourceVerificationMode(ctx) {
-					logger.Errorf("GetVerifiedTaskFunc failed: %v", err)
-					return nil, nil, fmt.Errorf("GetVerifiedTaskFunc failed: %w: %v", trustedresources.ErrorResourceVerificationFailed, err)
-				}
-				logger.Warnf("GetVerifiedTaskFunc failed: %v", err)
-				return t, s, nil
-			}
+		if err := trustedresources.VerifyTask(ctx, t, k8s, refSource, verificationpolicies); err != nil {
+			return nil, nil, fmt.Errorf("GetVerifiedTaskFunc failed: %w: %v", trustedresources.ErrResourceVerificationFailed, err) //nolint:errorlint
 		}
 		return t, s, nil
 	}
@@ -125,7 +117,7 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 	case cfg.FeatureFlags.EnableTektonOCIBundles && tr != nil && tr.Bundle != "":
 		// Return an inline function that implements GetTask by calling Resolver.Get with the specified task type and
 		// casting it to a TaskObject.
-		return func(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
+		return func(ctx context.Context, name string) (*v1beta1.Task, *v1beta1.RefSource, error) {
 			// If there is a bundle url at all, construct an OCI resolver to fetch the task.
 			kc, err := k8schain.New(ctx, k8s, k8schain.Options{
 				Namespace:          namespace,
@@ -141,8 +133,8 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 	case tr != nil && tr.Resolver != "" && requester != nil:
 		// Return an inline function that implements GetTask by calling Resolver.Get with the specified task type and
 		// casting it to a TaskObject.
-		return func(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
-			var replacedParams []v1beta1.Param
+		return func(ctx context.Context, name string) (*v1beta1.Task, *v1beta1.RefSource, error) {
+			var replacedParams v1beta1.Params
 			if ownerAsTR, ok := owner.(*v1beta1.TaskRun); ok {
 				stringReplacements, arrayReplacements := paramsFromTaskRun(ctx, ownerAsTR)
 				for k, v := range getContextReplacements("", ownerAsTR) {
@@ -173,11 +165,11 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 // resolveTask accepts an impl of remote.Resolver and attempts to
 // fetch a task with given name. An error is returned if the
 // remoteresource doesn't work or the returned data isn't a valid
-// v1beta1.TaskObject.
-func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kind v1beta1.TaskKind, k8s kubernetes.Interface) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
+// *v1beta1.Task.
+func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kind v1beta1.TaskKind, k8s kubernetes.Interface) (*v1beta1.Task, *v1beta1.RefSource, error) {
 	// Because the resolver will only return references with the same kind (eg ClusterTask), this will ensure we
 	// don't accidentally return a Task with the same name but different kind.
-	obj, configSource, err := resolver.Get(ctx, strings.TrimSuffix(strings.ToLower(string(kind)), "s"), name)
+	obj, refSource, err := resolver.Get(ctx, strings.TrimSuffix(strings.ToLower(string(kind)), "s"), name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -185,17 +177,33 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name string, kin
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to convert obj %s into Task", obj.GetObjectKind().GroupVersionKind().String())
 	}
-	return taskObj, configSource, nil
+	return taskObj, refSource, nil
 }
 
 // readRuntimeObjectAsTask tries to convert a generic runtime.Object
-// into a v1beta1.TaskObject type so that its meta and spec fields
-// can be read. An error is returned if the given object is not a
-// TaskObject or if there is an error validating or upgrading an
-// older TaskObject into its v1beta1 equivalent.
-func readRuntimeObjectAsTask(ctx context.Context, obj runtime.Object) (v1beta1.TaskObject, error) {
-	if task, ok := obj.(v1beta1.TaskObject); ok {
-		return task, nil
+// into a *v1beta1.Task type so that its meta and spec fields
+// can be read. v1 object will be converted to v1beta1 and returned.
+// An error is returned if the given object is not a Task nor a ClusterTask
+// or if there is an error validating or upgrading an older TaskObject into
+// its v1beta1 equivalent.
+// TODO(#5541): convert v1beta1 obj to v1 once we use v1 as the stored version
+func readRuntimeObjectAsTask(ctx context.Context, obj runtime.Object) (*v1beta1.Task, error) {
+	switch obj := obj.(type) {
+	case *v1beta1.Task:
+		return obj, nil
+	case *v1beta1.ClusterTask:
+		return convertClusterTaskToTask(*obj), nil
+	case *v1.Task:
+		t := &v1beta1.Task{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Task",
+				APIVersion: "tekton.dev/v1beta1",
+			},
+		}
+		if err := t.ConvertFrom(ctx, obj); err != nil {
+			return nil, err
+		}
+		return t, nil
 	}
 	return nil, errors.New("resource is not a task")
 }
@@ -209,15 +217,13 @@ type LocalTaskRefResolver struct {
 
 // GetTask will resolve either a Task or ClusterTask from the local cluster using a versioned Tekton client. It will
 // return an error if it can't find an appropriate Task for any reason.
-// TODO: if we want to set source for in-cluster task, set it here.
-// https://github.com/tektoncd/pipeline/issues/5522
-func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (v1beta1.TaskObject, *v1beta1.ConfigSource, error) {
+func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (*v1beta1.Task, *v1beta1.RefSource, error) {
 	if l.Kind == v1beta1.ClusterTaskKind {
 		task, err := l.Tektonclient.TektonV1beta1().ClusterTasks().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, nil, err
 		}
-		return task, nil, nil
+		return convertClusterTaskToTask(*task), nil, nil
 	}
 
 	// If we are going to resolve this reference locally, we need a namespace scope.
@@ -234,4 +240,22 @@ func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (v1beta
 // IsGetTaskErrTransient returns true if an error returned by GetTask is retryable.
 func IsGetTaskErrTransient(err error) bool {
 	return strings.Contains(err.Error(), errEtcdLeaderChange)
+}
+
+// convertClusterTaskToTask converts deprecated v1beta1 ClusterTasks to Tasks for
+// the rest of reconciling process since GetTask func and its upstream callers only
+// fetches the task spec and stores it in the taskrun status while the kind info
+// is not being used.
+func convertClusterTaskToTask(ct v1beta1.ClusterTask) *v1beta1.Task {
+	t := &v1beta1.Task{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Task",
+			APIVersion: "tekton.dev/v1beta1",
+		},
+	}
+
+	t.Spec = ct.Spec
+	t.ObjectMeta.Name = ct.ObjectMeta.Name
+
+	return t
 }

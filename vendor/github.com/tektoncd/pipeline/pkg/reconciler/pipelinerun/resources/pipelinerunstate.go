@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipeline/dag"
 	"go.uber.org/zap"
@@ -113,9 +112,7 @@ func (state PipelineRunState) ToMap() map[string]*ResolvedPipelineTask {
 // IsBeforeFirstTaskRun returns true if the PipelineRun has not yet started its first TaskRun
 func (state PipelineRunState) IsBeforeFirstTaskRun() bool {
 	for _, t := range state {
-		if t.IsCustomTask() && t.RunObject != nil {
-			return false
-		} else if t.TaskRun != nil {
+		if len(t.RunObjects) > 0 || len(t.TaskRuns) > 0 {
 			return false
 		}
 	}
@@ -133,16 +130,15 @@ func (state PipelineRunState) IsBeforeFirstTaskRun() bool {
 func (state PipelineRunState) AdjustStartTime(unadjustedStartTime *metav1.Time) *metav1.Time {
 	adjustedStartTime := unadjustedStartTime
 	for _, rpt := range state {
-		if rpt.TaskRun == nil {
-			if rpt.RunObject != nil {
-				creationTime := rpt.RunObject.GetObjectMeta().GetCreationTimestamp()
-				if creationTime.Time.Before(adjustedStartTime.Time) {
-					adjustedStartTime = &creationTime
-				}
+		for _, runObject := range rpt.RunObjects {
+			creationTime := runObject.GetObjectMeta().GetCreationTimestamp()
+			if creationTime.Time.Before(adjustedStartTime.Time) {
+				adjustedStartTime = &creationTime
 			}
-		} else {
-			if rpt.TaskRun.CreationTimestamp.Time.Before(adjustedStartTime.Time) {
-				adjustedStartTime = &rpt.TaskRun.CreationTimestamp
+		}
+		for _, taskRun := range rpt.TaskRuns {
+			if taskRun.CreationTimestamp.Time.Before(adjustedStartTime.Time) {
+				adjustedStartTime = &taskRun.CreationTimestamp
 			}
 		}
 	}
@@ -160,8 +156,9 @@ func (state PipelineRunState) GetTaskRunsResults() map[string][]v1beta1.TaskRunR
 		if !rpt.isSuccessful() {
 			continue
 		}
-		if rpt.TaskRun != nil {
-			results[rpt.PipelineTask.Name] = rpt.TaskRun.Status.TaskRunResults
+		// Currently a Matrix cannot produce results so this is for a singular TaskRun
+		if len(rpt.TaskRuns) == 1 {
+			results[rpt.PipelineTask.Name] = rpt.TaskRuns[0].Status.TaskRunResults
 		}
 	}
 	return results
@@ -178,18 +175,10 @@ func (state PipelineRunState) GetRunsResults() map[string][]v1beta1.CustomRunRes
 		if !rpt.isSuccessful() {
 			continue
 		}
-		if rpt.RunObject != nil {
-			switch r := rpt.RunObject.(type) {
-			case *v1beta1.CustomRun:
-				results[rpt.PipelineTask.Name] = r.Status.Results
-			case *v1alpha1.Run:
-				for _, origRes := range r.Status.Results {
-					results[rpt.PipelineTask.Name] = append(results[rpt.PipelineTask.Name], v1beta1.CustomRunResult{
-						Name:  origRes.Name,
-						Value: origRes.Value,
-					})
-				}
-			}
+		// Currently a Matrix cannot produce results so this is for a singular CustomRun
+		if len(rpt.RunObjects) == 1 {
+			cr := rpt.RunObjects[0].(*v1beta1.CustomRun)
+			results[rpt.PipelineTask.Name] = cr.Status.Results
 		}
 	}
 
@@ -203,10 +192,6 @@ func (state PipelineRunState) GetChildReferences() []v1beta1.ChildStatusReferenc
 
 	for _, rpt := range state {
 		switch {
-		case rpt.RunObject != nil:
-			childRefs = append(childRefs, rpt.getChildRefForRun(rpt.RunObject))
-		case rpt.TaskRun != nil:
-			childRefs = append(childRefs, rpt.getChildRefForTaskRun(rpt.TaskRun))
 		case len(rpt.TaskRuns) != 0:
 			for _, taskRun := range rpt.TaskRuns {
 				if taskRun != nil {
@@ -225,21 +210,10 @@ func (state PipelineRunState) GetChildReferences() []v1beta1.ChildStatusReferenc
 }
 
 func (t *ResolvedPipelineTask) getChildRefForRun(runObj v1beta1.RunObject) v1beta1.ChildStatusReference {
-	apiVersion := ""
-	kind := ""
-	switch runObj.(type) {
-	case *v1beta1.CustomRun:
-		apiVersion = v1beta1.SchemeGroupVersion.String()
-		kind = pipeline.CustomRunControllerName
-	case *v1alpha1.Run:
-		apiVersion = v1alpha1.SchemeGroupVersion.String()
-		kind = pipeline.RunControllerName
-	}
-
 	return v1beta1.ChildStatusReference{
 		TypeMeta: runtime.TypeMeta{
-			APIVersion: apiVersion,
-			Kind:       kind,
+			APIVersion: v1beta1.SchemeGroupVersion.String(),
+			Kind:       pipeline.CustomRunControllerName,
 		},
 		Name:             runObj.GetObjectMeta().GetName(),
 		PipelineTaskName: t.PipelineTask.Name,
@@ -266,41 +240,7 @@ func (state PipelineRunState) getNextTasks(candidateTasks sets.String) []*Resolv
 	tasks := []*ResolvedPipelineTask{}
 	for _, t := range state {
 		if _, ok := candidateTasks[t.PipelineTask.Name]; ok {
-			if t.TaskRun == nil && t.RunObject == nil && len(t.TaskRuns) == 0 && len(t.RunObjects) == 0 {
-				tasks = append(tasks, t)
-			}
-		}
-	}
-	tasks = append(tasks, state.getRetriableRuns(candidateTasks)...)
-	return tasks
-}
-
-// getRetriableRuns returns a list of pipelinetasks which should be executed next when the pipelinerun is stopping,
-// i.e. a list of failed pipelinetasks from candidateTasks which haven't exhausted their retries. Note that if a
-// pipelinetask is cancelled, the retries are not exhausted - they are not retriable.
-//
-// Note: This function only detects if v1alpha1.Run is retriable. For v1beta1.CustomRun and TaskRuns,
-// the retries implementation is hidden from PipelineRun reconciler. See TEP-0121 for details.
-// To be removed once v1alpha1.Run is removed, see #5870
-func (state PipelineRunState) getRetriableRuns(candidateTasks sets.String) []*ResolvedPipelineTask {
-	var tasks []*ResolvedPipelineTask
-	for _, t := range state {
-		if _, ok := candidateTasks[t.PipelineTask.Name]; ok {
-			var status *apis.Condition
-			switch {
-			case t.RunObject != nil:
-				status = t.RunObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
-			case len(t.RunObjects) != 0:
-				isDone := true
-				for _, run := range t.RunObjects {
-					isDone = isDone && run.IsDone()
-					c := run.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
-					if c.IsFalse() {
-						status = c
-					}
-				}
-			}
-			if status.IsFalse() && !t.isCancelled() && t.isRunRetriable() {
+			if len(t.TaskRuns) == 0 && len(t.RunObjects) == 0 {
 				tasks = append(tasks, t)
 			}
 		}
@@ -364,10 +304,6 @@ func (facts *PipelineRunFacts) DAGExecutionQueue() (PipelineRunState, error) {
 	}
 	if !facts.IsStopping() && !facts.IsGracefullyStopped() {
 		tasks = facts.State.getNextTasks(candidateTasks)
-	} else {
-		// when pipeline run is stopping normally or gracefully, do not schedule any new tasks and only
-		// wait for all running tasks to complete (including exhausting retries) and report their status
-		tasks = facts.State.getRetriableRuns(candidateTasks)
 	}
 	return tasks, nil
 }
@@ -561,7 +497,7 @@ func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 		for _, t := range facts.State {
 			if facts.isDAGTask(t.PipelineTask.Name) {
 				// if any of the dag task failed, change the aggregate status to failed and return
-				if t.isConditionStatusFalse() {
+				if !t.IsCustomTask() && t.areTaskRunsConditionStatusFalse() || t.IsCustomTask() && t.areRunObjectsConditionStatusFalse() {
 					aggregateStatus = v1beta1.PipelineRunReasonFailed.String()
 					break
 				}

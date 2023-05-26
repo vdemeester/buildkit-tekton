@@ -18,14 +18,10 @@ package trustedresources
 import "errors"
 
 var (
-	// ErrorResourceVerificationFailed is returned when trusted resources fails verification.
-	ErrorResourceVerificationFailed = errors.New("resource verification failed")
-	// ErrorEmptyVerificationConfig is returned when VerificationPolicy or config-trusted-resources configmap are founded
-	ErrorEmptyVerificationConfig = errors.New("no policies or config-trusted-resources configmap founded for verification")
-	// ErrorNoMatchedPolicies is returned when no policies are matched
-	ErrorNoMatchedPolicies = errors.New("no policies are matched")
-	// ErrorRegexMatch is returned when regex match returns error
-	ErrorRegexMatch = errors.New("regex failed to match")
-	// ErrorSignatureMissing is returned when signature is missing in resource
-	ErrorSignatureMissing = errors.New("signature is missing")
+	// ErrResourceVerificationFailed is returned when trusted resources fails verification.
+	ErrResourceVerificationFailed = errors.New("resource verification failed")
+	// ErrNoMatchedPolicies is returned when no policies are matched
+	ErrNoMatchedPolicies = errors.New("no policies are matched")
+	// ErrRegexMatch is returned when regex match returns error
+	ErrRegexMatch = errors.New("regex failed to match")
 )

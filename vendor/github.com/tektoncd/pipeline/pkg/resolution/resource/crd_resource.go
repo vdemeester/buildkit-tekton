@@ -27,6 +27,7 @@ import (
 	rrclient "github.com/tektoncd/pipeline/pkg/client/resolution/clientset/versioned"
 	rrlisters "github.com/tektoncd/pipeline/pkg/client/resolution/listers/resolution/v1beta1"
 	resolutioncommon "github.com/tektoncd/pipeline/pkg/resolution/common"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 )
@@ -54,10 +55,15 @@ var _ Requester = &CRDRequester{}
 func (r *CRDRequester) Submit(ctx context.Context, resolver ResolverName, req Request) (ResolvedResource, error) {
 	rr, _ := r.lister.ResolutionRequests(req.Namespace()).Get(req.Name())
 	if rr == nil {
-		if err := r.createResolutionRequest(ctx, resolver, req); err != nil {
+		if err := r.createResolutionRequest(ctx, resolver, req); err != nil &&
+			// When the request reconciles frequently, the creation may fail
+			// because the list informer cache is not updated.
+			// If the request already exists then we can assume that is in progress.
+			// The next reconcile will handle it based on the actual situation.
+			!apierrors.IsAlreadyExists(err) {
 			return nil, err
 		}
-		return nil, resolutioncommon.ErrorRequestInProgress
+		return nil, resolutioncommon.ErrRequestInProgress
 	}
 
 	if rr.Status.GetCondition(apis.ConditionSucceeded).IsUnknown() {
@@ -66,7 +72,7 @@ func (r *CRDRequester) Submit(ctx context.Context, resolver ResolverName, req Re
 		// that it doesn't get deleted until the caller is done
 		// with it. Use appendOwnerReference and then submit
 		// update to ResolutionRequest.
-		return nil, resolutioncommon.ErrorRequestInProgress
+		return nil, resolutioncommon.ErrRequestInProgress
 	}
 
 	if rr.Status.GetCondition(apis.ConditionSucceeded).IsTrue() {
@@ -116,7 +122,13 @@ func appendOwnerReference(rr *v1beta1.ResolutionRequest, req Request) {
 }
 
 func ownerRefsAreEqual(a, b metav1.OwnerReference) bool {
-	return a.APIVersion == b.APIVersion && a.Kind == b.Kind && a.Name == b.Name && a.UID == b.UID && a.Controller == b.Controller
+	// pointers values cannot be directly compared.
+	if (a.Controller == nil && b.Controller != nil) ||
+		(a.Controller != nil && b.Controller == nil) ||
+		(*a.Controller != *b.Controller) {
+		return false
+	}
+	return a.APIVersion == b.APIVersion && a.Kind == b.Kind && a.Name == b.Name && a.UID == b.UID
 }
 
 // readOnlyResolutionRequest is an opaque wrapper around ResolutionRequest
@@ -154,6 +166,6 @@ func (r readOnlyResolutionRequest) Data() ([]byte, error) {
 	return decodedBytes, nil
 }
 
-func (r readOnlyResolutionRequest) Source() *pipelinev1beta1.ConfigSource {
-	return r.req.Status.Source
+func (r readOnlyResolutionRequest) RefSource() *pipelinev1beta1.RefSource {
+	return r.req.Status.RefSource
 }

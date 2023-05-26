@@ -22,10 +22,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tektoncd/pipeline/pkg/apis/config"
-	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
-
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"github.com/tektoncd/pipeline/pkg/substitution"
 )
 
@@ -63,11 +61,8 @@ func ApplyParameters(ctx context.Context, p *v1beta1.PipelineSpec, pr *v1beta1.P
 			switch p.Default.Type {
 			case v1beta1.ParamTypeArray:
 				for _, pattern := range paramPatterns {
-					// array indexing for param is beta feature - the feature flag can be either set to alpha or beta
-					if config.CheckAlphaOrBetaAPIFields(ctx) {
-						for i := 0; i < len(p.Default.ArrayVal); i++ {
-							stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Default.ArrayVal[i]
-						}
+					for i := 0; i < len(p.Default.ArrayVal); i++ {
+						stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Default.ArrayVal[i]
 					}
 					arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Default.ArrayVal
 				}
@@ -78,6 +73,8 @@ func ApplyParameters(ctx context.Context, p *v1beta1.PipelineSpec, pr *v1beta1.P
 				for k, v := range p.Default.ObjectVal {
 					stringReplacements[fmt.Sprintf(objectIndividualVariablePattern, p.Name, k)] = v
 				}
+			case v1beta1.ParamTypeString:
+				fallthrough
 			default:
 				for _, pattern := range paramPatterns {
 					stringReplacements[fmt.Sprintf(pattern, p.Name)] = p.Default.StringVal
@@ -112,11 +109,8 @@ func paramsFromPipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) (map[st
 		switch p.Value.Type {
 		case v1beta1.ParamTypeArray:
 			for _, pattern := range paramPatterns {
-				// array indexing for param is beta feature - the feature flag can be either set to alpha ot beta
-				if config.CheckAlphaOrBetaAPIFields(ctx) {
-					for i := 0; i < len(p.Value.ArrayVal); i++ {
-						stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Value.ArrayVal[i]
-					}
+				for i := 0; i < len(p.Value.ArrayVal); i++ {
+					stringReplacements[fmt.Sprintf(pattern+"[%d]", p.Name, i)] = p.Value.ArrayVal[i]
 				}
 				arrayReplacements[fmt.Sprintf(pattern, p.Name)] = p.Value.ArrayVal
 			}
@@ -127,6 +121,8 @@ func paramsFromPipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) (map[st
 			for k, v := range p.Value.ObjectVal {
 				stringReplacements[fmt.Sprintf(objectIndividualVariablePattern, p.Name, k)] = v
 			}
+		case v1beta1.ParamTypeString:
+			fallthrough
 		default:
 			for _, pattern := range paramPatterns {
 				stringReplacements[fmt.Sprintf(pattern, p.Name)] = p.Value.StringVal
@@ -137,7 +133,8 @@ func paramsFromPipelineRun(ctx context.Context, pr *v1beta1.PipelineRun) (map[st
 	return stringReplacements, arrayReplacements, objectReplacements
 }
 
-func getContextReplacements(pipelineName string, pr *v1beta1.PipelineRun) map[string]string {
+// GetContextReplacements returns the pipelineRun context which can be used to replace context variables in the specifications
+func GetContextReplacements(pipelineName string, pr *v1beta1.PipelineRun) map[string]string {
 	return map[string]string{
 		"context.pipelineRun.name":      pr.Name,
 		"context.pipeline.name":         pipelineName,
@@ -147,9 +144,9 @@ func getContextReplacements(pipelineName string, pr *v1beta1.PipelineRun) map[st
 }
 
 // ApplyContexts applies the substitution from $(context.(pipelineRun|pipeline).*) with the specified values.
-// Currently supports only name substitution. Uses "" as a default if name is not specified.
+// Currently, supports only name substitution. Uses "" as a default if name is not specified.
 func ApplyContexts(spec *v1beta1.PipelineSpec, pipelineName string, pr *v1beta1.PipelineRun) *v1beta1.PipelineSpec {
-	return ApplyReplacements(spec, getContextReplacements(pipelineName, pr), map[string][]string{}, map[string]map[string]string{})
+	return ApplyReplacements(spec, GetContextReplacements(pipelineName, pr), map[string][]string{}, map[string]map[string]string{})
 }
 
 // ApplyPipelineTaskContexts applies the substitution from $(context.pipelineTask.*) with the specified values.
@@ -159,9 +156,12 @@ func ApplyPipelineTaskContexts(pt *v1beta1.PipelineTask) *v1beta1.PipelineTask {
 	replacements := map[string]string{
 		"context.pipelineTask.retries": strconv.Itoa(pt.Retries),
 	}
-	pt.Params = replaceParamValues(pt.Params, replacements, map[string][]string{}, map[string]map[string]string{})
+	pt.Params = pt.Params.ReplaceVariables(replacements, map[string][]string{}, map[string]map[string]string{})
 	if pt.IsMatrixed() {
-		pt.Matrix.Params = replaceParamValues(pt.Matrix.Params, replacements, map[string][]string{}, map[string]map[string]string{})
+		pt.Matrix.Params = pt.Params.ReplaceVariables(replacements, map[string][]string{}, map[string]map[string]string{})
+		for i := range pt.Matrix.Include {
+			pt.Matrix.Include[i].Params = pt.Matrix.Include[i].Params.ReplaceVariables(replacements, map[string][]string{}, map[string]map[string]string{})
+		}
 	}
 	return pt
 }
@@ -174,13 +174,19 @@ func ApplyTaskResults(targets PipelineRunState, resolvedResultRefs ResolvedResul
 	for _, resolvedPipelineRunTask := range targets {
 		if resolvedPipelineRunTask.PipelineTask != nil {
 			pipelineTask := resolvedPipelineRunTask.PipelineTask.DeepCopy()
-			pipelineTask.Params = replaceParamValues(pipelineTask.Params, stringReplacements, arrayReplacements, objectReplacements)
+			pipelineTask.Params = pipelineTask.Params.ReplaceVariables(stringReplacements, arrayReplacements, objectReplacements)
 			if pipelineTask.IsMatrixed() {
-				pipelineTask.Matrix.Params = replaceParamValues(pipelineTask.Matrix.Params, stringReplacements, nil, nil)
+				// Only string replacements from string, array or object results are supported
+				// We plan to support array replacements from array results soon (#5925)
+				pipelineTask.Matrix.Params = pipelineTask.Matrix.Params.ReplaceVariables(stringReplacements, nil, nil)
+				for i := range pipelineTask.Matrix.Include {
+					// matrix include parameters can only be type string
+					pipelineTask.Matrix.Include[i].Params = pipelineTask.Matrix.Include[i].Params.ReplaceVariables(stringReplacements, nil, nil)
+				}
 			}
-			pipelineTask.WhenExpressions = pipelineTask.WhenExpressions.ReplaceWhenExpressionsVariables(stringReplacements, arrayReplacements)
+			pipelineTask.WhenExpressions = pipelineTask.WhenExpressions.ReplaceVariables(stringReplacements, arrayReplacements)
 			if pipelineTask.TaskRef != nil && pipelineTask.TaskRef.Params != nil {
-				pipelineTask.TaskRef.Params = replaceParamValues(pipelineTask.TaskRef.Params, stringReplacements, arrayReplacements, objectReplacements)
+				pipelineTask.TaskRef.Params = pipelineTask.TaskRef.Params.ReplaceVariables(stringReplacements, arrayReplacements, objectReplacements)
 			}
 			resolvedPipelineRunTask.PipelineTask = pipelineTask
 		}
@@ -192,10 +198,10 @@ func ApplyPipelineTaskStateContext(state PipelineRunState, replacements map[stri
 	for _, resolvedPipelineRunTask := range state {
 		if resolvedPipelineRunTask.PipelineTask != nil {
 			pipelineTask := resolvedPipelineRunTask.PipelineTask.DeepCopy()
-			pipelineTask.Params = replaceParamValues(pipelineTask.Params, replacements, nil, nil)
-			pipelineTask.WhenExpressions = pipelineTask.WhenExpressions.ReplaceWhenExpressionsVariables(replacements, nil)
+			pipelineTask.Params = pipelineTask.Params.ReplaceVariables(replacements, nil, nil)
+			pipelineTask.WhenExpressions = pipelineTask.WhenExpressions.ReplaceVariables(replacements, nil)
 			if pipelineTask.TaskRef != nil && pipelineTask.TaskRef.Params != nil {
-				pipelineTask.TaskRef.Params = replaceParamValues(pipelineTask.TaskRef.Params, replacements, nil, nil)
+				pipelineTask.TaskRef.Params = pipelineTask.TaskRef.Params.ReplaceVariables(replacements, nil, nil)
 			}
 			resolvedPipelineRunTask.PipelineTask = pipelineTask
 		}
@@ -223,31 +229,37 @@ func ApplyReplacements(p *v1beta1.PipelineSpec, replacements map[string]string, 
 	p = p.DeepCopy()
 
 	for i := range p.Tasks {
-		p.Tasks[i].Params = replaceParamValues(p.Tasks[i].Params, replacements, arrayReplacements, objectReplacements)
+		p.Tasks[i].Params = p.Tasks[i].Params.ReplaceVariables(replacements, arrayReplacements, objectReplacements)
 		if p.Tasks[i].IsMatrixed() {
-			p.Tasks[i].Matrix.Params = replaceParamValues(p.Tasks[i].Matrix.Params, replacements, arrayReplacements, objectReplacements)
+			p.Tasks[i].Matrix.Params = p.Tasks[i].Matrix.Params.ReplaceVariables(replacements, arrayReplacements, nil)
+			for j := range p.Tasks[i].Matrix.Include {
+				p.Tasks[i].Matrix.Include[j].Params = p.Tasks[i].Matrix.Include[j].Params.ReplaceVariables(replacements, nil, nil)
+			}
 		}
 		for j := range p.Tasks[i].Workspaces {
 			p.Tasks[i].Workspaces[j].SubPath = substitution.ApplyReplacements(p.Tasks[i].Workspaces[j].SubPath, replacements)
 		}
-		p.Tasks[i].WhenExpressions = p.Tasks[i].WhenExpressions.ReplaceWhenExpressionsVariables(replacements, arrayReplacements)
+		p.Tasks[i].WhenExpressions = p.Tasks[i].WhenExpressions.ReplaceVariables(replacements, arrayReplacements)
 		if p.Tasks[i].TaskRef != nil && p.Tasks[i].TaskRef.Params != nil {
-			p.Tasks[i].TaskRef.Params = replaceParamValues(p.Tasks[i].TaskRef.Params, replacements, arrayReplacements, objectReplacements)
+			p.Tasks[i].TaskRef.Params = p.Tasks[i].TaskRef.Params.ReplaceVariables(replacements, arrayReplacements, objectReplacements)
 		}
 		p.Tasks[i] = propagateParams(p.Tasks[i], replacements, arrayReplacements, objectReplacements)
 	}
 
 	for i := range p.Finally {
-		p.Finally[i].Params = replaceParamValues(p.Finally[i].Params, replacements, arrayReplacements, objectReplacements)
+		p.Finally[i].Params = p.Finally[i].Params.ReplaceVariables(replacements, arrayReplacements, objectReplacements)
 		if p.Finally[i].IsMatrixed() {
-			p.Finally[i].Matrix.Params = replaceParamValues(p.Finally[i].Matrix.Params, replacements, arrayReplacements, objectReplacements)
+			p.Finally[i].Matrix.Params = p.Finally[i].Matrix.Params.ReplaceVariables(replacements, arrayReplacements, nil)
+			for j := range p.Finally[i].Matrix.Include {
+				p.Finally[i].Matrix.Include[j].Params = p.Finally[i].Matrix.Include[j].Params.ReplaceVariables(replacements, nil, nil)
+			}
 		}
 		for j := range p.Finally[i].Workspaces {
 			p.Finally[i].Workspaces[j].SubPath = substitution.ApplyReplacements(p.Finally[i].Workspaces[j].SubPath, replacements)
 		}
-		p.Finally[i].WhenExpressions = p.Finally[i].WhenExpressions.ReplaceWhenExpressionsVariables(replacements, arrayReplacements)
+		p.Finally[i].WhenExpressions = p.Finally[i].WhenExpressions.ReplaceVariables(replacements, arrayReplacements)
 		if p.Finally[i].TaskRef != nil && p.Finally[i].TaskRef.Params != nil {
-			p.Finally[i].TaskRef.Params = replaceParamValues(p.Finally[i].TaskRef.Params, replacements, arrayReplacements, objectReplacements)
+			p.Finally[i].TaskRef.Params = p.Finally[i].TaskRef.Params.ReplaceVariables(replacements, arrayReplacements, objectReplacements)
 		}
 		p.Finally[i] = propagateParams(p.Finally[i], replacements, arrayReplacements, objectReplacements)
 	}
@@ -301,24 +313,20 @@ func propagateParams(t v1beta1.PipelineTask, stringReplacements map[string]strin
 	return t
 }
 
-func replaceParamValues(params []v1beta1.Param, stringReplacements map[string]string, arrayReplacements map[string][]string, objectReplacements map[string]map[string]string) []v1beta1.Param {
-	for i := range params {
-		params[i].Value.ApplyReplacements(stringReplacements, arrayReplacements, objectReplacements)
-	}
-	return params
-}
-
 // ApplyTaskResultsToPipelineResults applies the results of completed TasksRuns and Runs to a Pipeline's
 // list of PipelineResults, returning the computed set of PipelineRunResults. References to
 // non-existent TaskResults or failed TaskRuns or Runs result in a PipelineResult being considered invalid
 // and omitted from the returned slice. A nil slice is returned if no results are passed in or all
 // results are invalid.
 func ApplyTaskResultsToPipelineResults(
+	_ context.Context,
 	results []v1beta1.PipelineResult,
 	taskRunResults map[string][]v1beta1.TaskRunResult,
-	customTaskResults map[string][]v1beta1.CustomRunResult) ([]v1beta1.PipelineRunResult, error) {
+	customTaskResults map[string][]v1beta1.CustomRunResult,
+	taskstatus map[string]string) ([]v1beta1.PipelineRunResult, error) {
 	var runResults []v1beta1.PipelineRunResult
 	var invalidPipelineResults []string
+
 	stringReplacements := map[string]string{}
 	arrayReplacements := map[string][]string{}
 	objectReplacements := map[string]map[string]string{}
@@ -339,6 +347,7 @@ func ApplyTaskResultsToPipelineResults(
 				continue
 			}
 			variableParts := strings.Split(variable, ".")
+
 			if (variableParts[0] != v1beta1.ResultTaskPart && variableParts[0] != v1beta1.ResultFinallyPart) || variableParts[2] != v1beta1.ResultResultPart {
 				validPipelineResult = false
 				invalidPipelineResults = append(invalidPipelineResults, pipelineResult.Name)
@@ -374,6 +383,13 @@ func ApplyTaskResultsToPipelineResults(
 				} else if resultValue := runResultValue(taskName, resultName, customTaskResults); resultValue != nil {
 					stringReplacements[variable] = *resultValue
 				} else {
+					// if the task is not successful (e.g. skipped or failed) and the results is missing, don't return error
+					if status, ok := taskstatus[PipelineTaskStatusPrefix+taskName+PipelineTaskStatusSuffix]; ok {
+						if status != v1beta1.TaskRunReasonSuccessful.String() {
+							validPipelineResult = false
+							continue
+						}
+					}
 					// referred result name is not existent
 					invalidPipelineResults = append(invalidPipelineResults, pipelineResult.Name)
 					validPipelineResult = false
@@ -391,6 +407,13 @@ func ApplyTaskResultsToPipelineResults(
 						validPipelineResult = false
 					}
 				} else {
+					// if the task is not successful (e.g. skipped or failed) and the results is missing, don't return error
+					if status, ok := taskstatus[PipelineTaskStatusPrefix+taskName+PipelineTaskStatusSuffix]; ok {
+						if status != v1beta1.TaskRunReasonSuccessful.String() {
+							validPipelineResult = false
+							continue
+						}
+					}
 					// referred result name is not existent
 					invalidPipelineResults = append(invalidPipelineResults, pipelineResult.Name)
 					validPipelineResult = false

@@ -29,6 +29,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/result"
 	"github.com/tektoncd/pipeline/pkg/termination"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -69,6 +70,9 @@ const (
 	// is that the creation of the pod backing the TaskRun failed
 	ReasonPodCreationFailed = "PodCreationFailed"
 
+	// ReasonPodAdmissionFailed indicates that the TaskRun's pod failed to pass admission validation
+	ReasonPodAdmissionFailed = "PodAdmissionFailed"
+
 	// ReasonPending indicates that the pod is in corev1.Pending, and the reason is not
 	// ReasonExceededNodeResources or isPodHitConfigError
 	ReasonPending = "Pending"
@@ -81,7 +85,10 @@ const (
 	timeFormat = "2006-01-02T15:04:05.000Z07:00"
 )
 
-const oomKilled = "OOMKilled"
+const (
+	oomKilled = "OOMKilled"
+	evicted   = "Evicted"
+)
 
 // SidecarsReady returns true if all of the Pod's sidecars are Ready or
 // Terminated.
@@ -175,10 +182,9 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 		}
 
 		// populate task run CRD with results from sidecar logs
-		taskResults, pipelineResourceResults, _ := filterResultsAndResources(sidecarLogResults, specResults)
-		if tr.IsSuccessful() {
+		taskResults, _ := filterResults(sidecarLogResults, specResults)
+		if tr.IsDone() {
 			trs.TaskRunResults = append(trs.TaskRunResults, taskResults...)
-			trs.ResourcesResult = append(trs.ResourcesResult, pipelineResourceResults...)
 		}
 	}
 	// Continue with extraction of termination messages
@@ -202,10 +208,9 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 					merr = multierror.Append(merr, err)
 				}
 
-				taskResults, pipelineResourceResults, filteredResults := filterResultsAndResources(results, specResults)
-				if tr.IsSuccessful() {
+				taskResults, filteredResults := filterResults(results, specResults)
+				if tr.IsDone() {
 					trs.TaskRunResults = append(trs.TaskRunResults, taskResults...)
-					trs.ResourcesResult = append(trs.ResourcesResult, pipelineResourceResults...)
 				}
 				msg, err = createMessageFromResults(filteredResults)
 				if err != nil {
@@ -244,7 +249,7 @@ func setTaskRunStatusBasedOnSidecarStatus(sidecarStatuses []corev1.ContainerStat
 	}
 }
 
-func createMessageFromResults(results []v1beta1.PipelineResourceResult) (string, error) {
+func createMessageFromResults(results []result.RunResult) (string, error) {
 	if len(results) == 0 {
 		return "", nil
 	}
@@ -255,18 +260,20 @@ func createMessageFromResults(results []v1beta1.PipelineResourceResult) (string,
 	return string(bytes), nil
 }
 
-func filterResultsAndResources(results []v1beta1.PipelineResourceResult, specResults []v1beta1.TaskResult) ([]v1beta1.TaskRunResult, []v1beta1.PipelineResourceResult, []v1beta1.PipelineResourceResult) {
+// filterResults filters the RunResults and TaskResults based on the results declared in the task spec.
+// It returns a slice of any of the input results that are defined in the task spec, converted to TaskRunResults,
+// and a slice of any of the RunResults that don't represent internal values (i.e. those that should not be displayed in the TaskRun status.
+func filterResults(results []result.RunResult, specResults []v1beta1.TaskResult) ([]v1beta1.TaskRunResult, []result.RunResult) {
 	var taskResults []v1beta1.TaskRunResult
-	var pipelineResourceResults []v1beta1.PipelineResourceResult
-	var filteredResults []v1beta1.PipelineResourceResult
+	var filteredResults []result.RunResult
 	neededTypes := make(map[string]v1beta1.ResultsType)
 	for _, r := range specResults {
 		neededTypes[r.Name] = r.Type
 	}
 	for _, r := range results {
 		switch r.ResultType {
-		case v1beta1.TaskRunResultType:
-			taskRunResult := v1beta1.TaskRunResult{}
+		case result.TaskRunResultType:
+			var taskRunResult v1beta1.TaskRunResult
 			if neededTypes[r.Key] == v1beta1.ResultsTypeString {
 				taskRunResult = v1beta1.TaskRunResult{
 					Name:  r.Key,
@@ -287,18 +294,15 @@ func filterResultsAndResources(results []v1beta1.PipelineResourceResult, specRes
 			}
 			taskResults = append(taskResults, taskRunResult)
 			filteredResults = append(filteredResults, r)
-		case v1beta1.InternalTektonResultType:
+		case result.InternalTektonResultType:
 			// Internal messages are ignored because they're not used as external result
 			continue
-		case v1beta1.PipelineResourceResultType:
-			fallthrough
 		default:
-			pipelineResourceResults = append(pipelineResourceResults, r)
 			filteredResults = append(filteredResults, r)
 		}
 	}
 
-	return taskResults, pipelineResourceResults, filteredResults
+	return taskResults, filteredResults
 }
 
 func removeDuplicateResults(taskRunResult []v1beta1.TaskRunResult) []v1beta1.TaskRunResult {
@@ -320,7 +324,7 @@ func removeDuplicateResults(taskRunResult []v1beta1.TaskRunResult) []v1beta1.Tas
 	return uniq
 }
 
-func extractStartedAtTimeFromResults(results []v1beta1.PipelineResourceResult) (*metav1.Time, error) {
+func extractStartedAtTimeFromResults(results []result.RunResult) (*metav1.Time, error) {
 	for _, result := range results {
 		if result.Key == "StartedAt" {
 			t, err := time.Parse(timeFormat, result.Value)
@@ -331,10 +335,10 @@ func extractStartedAtTimeFromResults(results []v1beta1.PipelineResourceResult) (
 			return &startedAt, nil
 		}
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // would be more ergonomic to return a sentinel error
 }
 
-func extractExitCodeFromResults(results []v1beta1.PipelineResourceResult) (*int32, error) {
+func extractExitCodeFromResults(results []result.RunResult) (*int32, error) {
 	for _, result := range results {
 		if result.Key == "ExitCode" {
 			// We could just pass the string through but this provides extra validation
@@ -346,7 +350,7 @@ func extractExitCodeFromResults(results []v1beta1.PipelineResourceResult) (*int3
 			return &exitCode, nil
 		}
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // would be more ergonomic to return a sentinel error
 }
 
 func updateCompletedTaskRunStatus(logger *zap.SugaredLogger, trs *v1beta1.TaskRunStatus, pod *corev1.Pod) {
@@ -376,6 +380,8 @@ func updateIncompleteTaskRunStatus(trs *v1beta1.TaskRunStatus, pod *corev1.Pod) 
 		default:
 			markStatusRunning(trs, ReasonPending, getWaitingMessage(pod))
 		}
+	case corev1.PodSucceeded, corev1.PodFailed, corev1.PodUnknown:
+		// Do nothing; pod has completed or is in an unknown state.
 	}
 }
 
@@ -420,6 +426,14 @@ func areStepsComplete(pod *corev1.Pod) bool {
 }
 
 func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
+	// If a pod was evicted, use the pods status message before trying to
+	// determine a failure message from the pod's container statuses. A
+	// container may have a generic exit code that contains less information,
+	// such as an exit code and message related to not being located.
+	if pod.Status.Reason == evicted {
+		return pod.Status.Message
+	}
+
 	// First, try to surface an error about the actual init container that failed.
 	for _, status := range pod.Status.InitContainerStatuses {
 		if msg := extractContainerFailureMessage(logger, status, pod.ObjectMeta); len(msg) > 0 {
@@ -458,8 +472,8 @@ func extractContainerFailureMessage(logger *zap.SugaredLogger, status corev1.Con
 	if term != nil {
 		msg := status.State.Terminated.Message
 		r, _ := termination.ParseMessage(logger, msg)
-		for _, result := range r {
-			if result.ResultType == v1beta1.InternalTektonResultType && result.Key == "Reason" && result.Value == "TimeoutExceeded" {
+		for _, runResult := range r {
+			if runResult.ResultType == result.InternalTektonResultType && runResult.Key == "Reason" && runResult.Value == "TimeoutExceeded" {
 				// Newline required at end to prevent yaml parser from breaking the log help text at 80 chars
 				return fmt.Sprintf("%q exited because the step exceeded the specified timeout limit; for logs run: kubectl -n %s logs %s -c %s\n",
 					status.Name,

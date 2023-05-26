@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 )
 
@@ -69,29 +68,6 @@ func validateArrayResultsIndex(allResolvedResultRefs ResolvedResultRefs) (Resolv
 		}
 	}
 	return allResolvedResultRefs, "", nil
-}
-
-// extractResultRefs resolves any ResultReference that are found in param or pipeline result
-// Returns nil if none are found
-func extractResultRefsForParam(pipelineRunState PipelineRunState, param v1beta1.Param) (ResolvedResultRefs, error) {
-	expressions, ok := v1beta1.GetVarSubstitutionExpressionsForParam(param)
-	if ok {
-		return extractResultRefs(expressions, pipelineRunState)
-	}
-	return nil, nil
-}
-
-func extractResultRefs(expressions []string, pipelineRunState PipelineRunState) (ResolvedResultRefs, error) {
-	resultRefs := v1beta1.NewResultRefs(expressions)
-	var resolvedResultRefs ResolvedResultRefs
-	for _, resultRef := range resultRefs {
-		resolvedResultRef, _, err := resolveResultRef(pipelineRunState, resultRef)
-		if err != nil {
-			return nil, err
-		}
-		resolvedResultRefs = append(resolvedResultRefs, resolvedResultRef)
-	}
-	return removeDup(resolvedResultRefs), nil
 }
 
 func removeDup(refs ResolvedResultRefs) ResolvedResultRefs {
@@ -146,23 +122,32 @@ func resolveResultRef(pipelineState PipelineRunState, resultRef *v1beta1.ResultR
 	if referencedPipelineTask == nil {
 		return nil, resultRef.PipelineTask, fmt.Errorf("could not find task %q referenced by result", resultRef.PipelineTask)
 	}
-	if !referencedPipelineTask.isSuccessful() {
-		return nil, resultRef.PipelineTask, fmt.Errorf("task %q referenced by result was not successful", referencedPipelineTask.PipelineTask.Name)
+	if !referencedPipelineTask.isSuccessful() && !referencedPipelineTask.isFailure() {
+		return nil, resultRef.PipelineTask, fmt.Errorf("task %q referenced by result was not finished", referencedPipelineTask.PipelineTask.Name)
 	}
 
 	var runName, runValue, taskRunName string
 	var resultValue v1beta1.ResultValue
 	var err error
 	if referencedPipelineTask.IsCustomTask() {
-		runName = referencedPipelineTask.RunObject.GetObjectMeta().GetName()
-		runValue, err = findRunResultForParam(referencedPipelineTask.RunObject, resultRef)
+		if len(referencedPipelineTask.RunObjects) != 1 {
+			return nil, resultRef.PipelineTask, fmt.Errorf("referenced tasks can only have length of 1 since a matrixed task does not support producing results, but was length %d", len(referencedPipelineTask.TaskRuns))
+		}
+		runObject := referencedPipelineTask.RunObjects[0]
+		runName = runObject.GetObjectMeta().GetName()
+		runValue, err = findRunResultForParam(runObject, resultRef)
 		resultValue = *v1beta1.NewStructuredValues(runValue)
 		if err != nil {
 			return nil, resultRef.PipelineTask, err
 		}
 	} else {
-		taskRunName = referencedPipelineTask.TaskRun.Name
-		resultValue, err = findTaskResultForParam(referencedPipelineTask.TaskRun, resultRef)
+		// Check to make sure the referenced task is not a matrix since a matrix does not support producing results
+		if len(referencedPipelineTask.TaskRuns) != 1 {
+			return nil, resultRef.PipelineTask, fmt.Errorf("referenced tasks can only have length of 1 since a matrixed task does not support producing results, but was length %d", len(referencedPipelineTask.TaskRuns))
+		}
+		taskRun := referencedPipelineTask.TaskRuns[0]
+		taskRunName = taskRun.Name
+		resultValue, err = findTaskResultForParam(taskRun, resultRef)
 		if err != nil {
 			return nil, resultRef.PipelineTask, err
 		}
@@ -177,18 +162,10 @@ func resolveResultRef(pipelineState PipelineRunState, resultRef *v1beta1.ResultR
 }
 
 func findRunResultForParam(runObj v1beta1.RunObject, reference *v1beta1.ResultRef) (string, error) {
-	switch run := runObj.(type) {
-	case *v1beta1.CustomRun:
-		for _, result := range run.Status.Results {
-			if result.Name == reference.Result {
-				return result.Value, nil
-			}
-		}
-	case *v1alpha1.Run:
-		for _, result := range run.Status.Results {
-			if result.Name == reference.Result {
-				return result.Value, nil
-			}
+	run := runObj.(*v1beta1.CustomRun)
+	for _, result := range run.Status.Results {
+		if result.Name == reference.Result {
+			return result.Value, nil
 		}
 	}
 	return "", fmt.Errorf("Could not find result with name %s for task %s", reference.Result, reference.PipelineTask)
@@ -221,6 +198,8 @@ func (rs ResolvedResultRefs) getStringReplacements() map[string]string {
 				}
 			}
 
+		case v1beta1.ParamTypeString:
+			fallthrough
 		default:
 			for _, target := range r.getReplaceTarget() {
 				replacements[target] = r.Value.StringVal

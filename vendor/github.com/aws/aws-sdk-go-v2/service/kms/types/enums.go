@@ -115,8 +115,8 @@ const (
 	CustomerMasterKeySpecSm2              CustomerMasterKeySpec = "SM2"
 )
 
-// Values returns all known values for CustomerMasterKeySpec. Note that this can be
-// expanded in the future, and so it is only as up to date as the client. The
+// Values returns all known values for CustomerMasterKeySpec. Note that this can
+// be expanded in the future, and so it is only as up to date as the client. The
 // ordering of this slice is not guaranteed to be stable across updates.
 func (CustomerMasterKeySpec) Values() []CustomerMasterKeySpec {
 	return []CustomerMasterKeySpec{
@@ -288,6 +288,22 @@ func (GrantOperation) Values() []GrantOperation {
 	}
 }
 
+type KeyEncryptionMechanism string
+
+// Enum values for KeyEncryptionMechanism
+const (
+	KeyEncryptionMechanismRsaesOaepSha256 KeyEncryptionMechanism = "RSAES_OAEP_SHA_256"
+)
+
+// Values returns all known values for KeyEncryptionMechanism. Note that this can
+// be expanded in the future, and so it is only as up to date as the client. The
+// ordering of this slice is not guaranteed to be stable across updates.
+func (KeyEncryptionMechanism) Values() []KeyEncryptionMechanism {
+	return []KeyEncryptionMechanism{
+		"RSAES_OAEP_SHA_256",
+	}
+}
+
 type KeyManagerType string
 
 // Enum values for KeyManagerType
@@ -385,9 +401,9 @@ const (
 	KeyUsageTypeGenerateVerifyMac KeyUsageType = "GENERATE_VERIFY_MAC"
 )
 
-// Values returns all known values for KeyUsageType. Note that this can be expanded
-// in the future, and so it is only as up to date as the client. The ordering of
-// this slice is not guaranteed to be stable across updates.
+// Values returns all known values for KeyUsageType. Note that this can be
+// expanded in the future, and so it is only as up to date as the client. The
+// ordering of this slice is not guaranteed to be stable across updates.
 func (KeyUsageType) Values() []KeyUsageType {
 	return []KeyUsageType{
 		"SIGN_VERIFY",
@@ -534,9 +550,9 @@ const (
 	XksProxyConnectivityTypeVpcEndpointService XksProxyConnectivityType = "VPC_ENDPOINT_SERVICE"
 )
 
-// Values returns all known values for XksProxyConnectivityType. Note that this can
-// be expanded in the future, and so it is only as up to date as the client. The
-// ordering of this slice is not guaranteed to be stable across updates.
+// Values returns all known values for XksProxyConnectivityType. Note that this
+// can be expanded in the future, and so it is only as up to date as the client.
+// The ordering of this slice is not guaranteed to be stable across updates.
 func (XksProxyConnectivityType) Values() []XksProxyConnectivityType {
 	return []XksProxyConnectivityType{
 		"PUBLIC_ENDPOINT",

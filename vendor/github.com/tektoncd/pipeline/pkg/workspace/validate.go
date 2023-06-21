@@ -20,18 +20,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // ValidateBindings will return an error if the bound workspaces in binds don't satisfy the declared
 // workspaces in decls.
-func ValidateBindings(ctx context.Context, decls []v1beta1.WorkspaceDeclaration, binds []v1beta1.WorkspaceBinding) error {
+func ValidateBindings(ctx context.Context, decls []v1.WorkspaceDeclaration, binds []v1.WorkspaceBinding) error {
 	// This will also be validated at webhook time but in case the webhook isn't invoked for some
 	// reason we'll invoke the same validation here.
 	for _, b := range binds {
 		if err := b.Validate(ctx); err != nil {
-			return fmt.Errorf("binding %q is invalid: %v", b.Name, err)
+			return fmt.Errorf("binding %q is invalid: %w", b.Name, err)
 		}
 	}
 
@@ -66,7 +66,7 @@ func ValidateBindings(ctx context.Context, decls []v1beta1.WorkspaceDeclaration,
 //
 // This is only useful to validate that WorkspaceBindings in TaskRuns are compatible
 // with affinity rules enforced by the AffinityAssistant.
-func ValidateOnlyOnePVCIsUsed(wb []v1beta1.WorkspaceBinding) error {
+func ValidateOnlyOnePVCIsUsed(wb []v1.WorkspaceBinding) error {
 	workspaceVolumes := make(map[string]bool)
 	for _, w := range wb {
 		if w.PersistentVolumeClaim != nil {

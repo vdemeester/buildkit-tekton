@@ -3,7 +3,7 @@ module github.com/vdemeester/buildkit-tekton
 go 1.18
 
 require (
-	github.com/docker/cli v23.0.1+incompatible
+	github.com/docker/cli v24.0.5+incompatible
 	github.com/docker/distribution v2.8.1+incompatible
 	github.com/google/go-cmp v0.5.9
 	github.com/moby/buildkit v0.11.5
@@ -70,7 +70,7 @@ require (
 	github.com/containerd/typeurl v1.0.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dimchansky/utfbom v1.1.1 // indirect
-	github.com/docker/docker v23.0.1+incompatible // indirect
+	github.com/docker/docker v24.0.5+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.7.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.9.0 // indirect
 	github.com/evanphx/json-patch v4.12.0+incompatible // indirect

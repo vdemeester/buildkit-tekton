@@ -6,9 +6,11 @@ type AlgorithmSpec string
 
 // Enum values for AlgorithmSpec
 const (
-	AlgorithmSpecRsaesPkcs1V15   AlgorithmSpec = "RSAES_PKCS1_V1_5"
-	AlgorithmSpecRsaesOaepSha1   AlgorithmSpec = "RSAES_OAEP_SHA_1"
-	AlgorithmSpecRsaesOaepSha256 AlgorithmSpec = "RSAES_OAEP_SHA_256"
+	AlgorithmSpecRsaesPkcs1V15       AlgorithmSpec = "RSAES_PKCS1_V1_5"
+	AlgorithmSpecRsaesOaepSha1       AlgorithmSpec = "RSAES_OAEP_SHA_1"
+	AlgorithmSpecRsaesOaepSha256     AlgorithmSpec = "RSAES_OAEP_SHA_256"
+	AlgorithmSpecRsaAesKeyWrapSha1   AlgorithmSpec = "RSA_AES_KEY_WRAP_SHA_1"
+	AlgorithmSpecRsaAesKeyWrapSha256 AlgorithmSpec = "RSA_AES_KEY_WRAP_SHA_256"
 )
 
 // Values returns all known values for AlgorithmSpec. Note that this can be
@@ -19,6 +21,8 @@ func (AlgorithmSpec) Values() []AlgorithmSpec {
 		"RSAES_PKCS1_V1_5",
 		"RSAES_OAEP_SHA_1",
 		"RSAES_OAEP_SHA_256",
+		"RSA_AES_KEY_WRAP_SHA_1",
+		"RSA_AES_KEY_WRAP_SHA_256",
 	}
 }
 
@@ -115,8 +119,8 @@ const (
 	CustomerMasterKeySpecSm2              CustomerMasterKeySpec = "SM2"
 )
 
-// Values returns all known values for CustomerMasterKeySpec. Note that this can be
-// expanded in the future, and so it is only as up to date as the client. The
+// Values returns all known values for CustomerMasterKeySpec. Note that this can
+// be expanded in the future, and so it is only as up to date as the client. The
 // ordering of this slice is not guaranteed to be stable across updates.
 func (CustomerMasterKeySpec) Values() []CustomerMasterKeySpec {
 	return []CustomerMasterKeySpec{
@@ -288,6 +292,22 @@ func (GrantOperation) Values() []GrantOperation {
 	}
 }
 
+type KeyEncryptionMechanism string
+
+// Enum values for KeyEncryptionMechanism
+const (
+	KeyEncryptionMechanismRsaesOaepSha256 KeyEncryptionMechanism = "RSAES_OAEP_SHA_256"
+)
+
+// Values returns all known values for KeyEncryptionMechanism. Note that this can
+// be expanded in the future, and so it is only as up to date as the client. The
+// ordering of this slice is not guaranteed to be stable across updates.
+func (KeyEncryptionMechanism) Values() []KeyEncryptionMechanism {
+	return []KeyEncryptionMechanism{
+		"RSAES_OAEP_SHA_256",
+	}
+}
+
 type KeyManagerType string
 
 // Enum values for KeyManagerType
@@ -385,9 +405,9 @@ const (
 	KeyUsageTypeGenerateVerifyMac KeyUsageType = "GENERATE_VERIFY_MAC"
 )
 
-// Values returns all known values for KeyUsageType. Note that this can be expanded
-// in the future, and so it is only as up to date as the client. The ordering of
-// this slice is not guaranteed to be stable across updates.
+// Values returns all known values for KeyUsageType. Note that this can be
+// expanded in the future, and so it is only as up to date as the client. The
+// ordering of this slice is not guaranteed to be stable across updates.
 func (KeyUsageType) Values() []KeyUsageType {
 	return []KeyUsageType{
 		"SIGN_VERIFY",
@@ -515,6 +535,8 @@ type WrappingKeySpec string
 // Enum values for WrappingKeySpec
 const (
 	WrappingKeySpecRsa2048 WrappingKeySpec = "RSA_2048"
+	WrappingKeySpecRsa3072 WrappingKeySpec = "RSA_3072"
+	WrappingKeySpecRsa4096 WrappingKeySpec = "RSA_4096"
 )
 
 // Values returns all known values for WrappingKeySpec. Note that this can be
@@ -523,6 +545,8 @@ const (
 func (WrappingKeySpec) Values() []WrappingKeySpec {
 	return []WrappingKeySpec{
 		"RSA_2048",
+		"RSA_3072",
+		"RSA_4096",
 	}
 }
 
@@ -534,9 +558,9 @@ const (
 	XksProxyConnectivityTypeVpcEndpointService XksProxyConnectivityType = "VPC_ENDPOINT_SERVICE"
 )
 
-// Values returns all known values for XksProxyConnectivityType. Note that this can
-// be expanded in the future, and so it is only as up to date as the client. The
-// ordering of this slice is not guaranteed to be stable across updates.
+// Values returns all known values for XksProxyConnectivityType. Note that this
+// can be expanded in the future, and so it is only as up to date as the client.
+// The ordering of this slice is not guaranteed to be stable across updates.
 func (XksProxyConnectivityType) Values() []XksProxyConnectivityType {
 	return []XksProxyConnectivityType{
 		"PUBLIC_ENDPOINT",

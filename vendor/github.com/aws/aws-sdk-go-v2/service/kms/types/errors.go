@@ -27,7 +27,7 @@ func (e *AlreadyExistsException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *AlreadyExistsException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "AlreadyExistsException"
 	}
 	return *e.ErrorCodeOverride
@@ -39,8 +39,7 @@ func (e *AlreadyExistsException) ErrorFault() smithy.ErrorFault { return smithy.
 // history with an CloudHSM key store in the account. Each CloudHSM key store in
 // the account must be associated with a different CloudHSM cluster. CloudHSM
 // clusters that share a backup history have the same cluster certificate. To view
-// the cluster certificate of an CloudHSM cluster, use the DescribeClusters
-// (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
+// the cluster certificate of an CloudHSM cluster, use the DescribeClusters (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
 // operation.
 type CloudHsmClusterInUseException struct {
 	Message *string
@@ -60,7 +59,7 @@ func (e *CloudHsmClusterInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CloudHsmClusterInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CloudHsmClusterInUseException"
 	}
 	return *e.ErrorCodeOverride
@@ -69,41 +68,30 @@ func (e *CloudHsmClusterInUseException) ErrorFault() smithy.ErrorFault { return 
 
 // The request was rejected because the associated CloudHSM cluster did not meet
 // the configuration requirements for an CloudHSM key store.
+//   - The CloudHSM cluster must be configured with private subnets in at least
+//     two different Availability Zones in the Region.
+//   - The security group for the cluster (https://docs.aws.amazon.com/cloudhsm/latest/userguide/configure-sg.html)
+//     (cloudhsm-cluster--sg) must include inbound rules and outbound rules that allow
+//     TCP traffic on ports 2223-2225. The Source in the inbound rules and the
+//     Destination in the outbound rules must match the security group ID. These rules
+//     are set by default when you create the CloudHSM cluster. Do not delete or change
+//     them. To get information about a particular security group, use the
+//     DescribeSecurityGroups (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSecurityGroups.html)
+//     operation.
+//   - The CloudHSM cluster must contain at least as many HSMs as the operation
+//     requires. To add HSMs, use the CloudHSM CreateHsm (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_CreateHsm.html)
+//     operation. For the CreateCustomKeyStore , UpdateCustomKeyStore , and CreateKey
+//     operations, the CloudHSM cluster must have at least two active HSMs, each in a
+//     different Availability Zone. For the ConnectCustomKeyStore operation, the
+//     CloudHSM must contain at least one active HSM.
 //
-// * The CloudHSM
-// cluster must be configured with private subnets in at least two different
-// Availability Zones in the Region.
-//
-// * The security group for the cluster
-// (https://docs.aws.amazon.com/cloudhsm/latest/userguide/configure-sg.html)
-// (cloudhsm-cluster--sg) must include inbound rules and outbound rules that allow
-// TCP traffic on ports 2223-2225. The Source in the inbound rules and the
-// Destination in the outbound rules must match the security group ID. These rules
-// are set by default when you create the CloudHSM cluster. Do not delete or change
-// them. To get information about a particular security group, use the
-// DescribeSecurityGroups
-// (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSecurityGroups.html)
-// operation.
-//
-// * The CloudHSM cluster must contain at least as many HSMs as the
-// operation requires. To add HSMs, use the CloudHSM CreateHsm
-// (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_CreateHsm.html)
-// operation. For the CreateCustomKeyStore, UpdateCustomKeyStore, and CreateKey
-// operations, the CloudHSM cluster must have at least two active HSMs, each in a
-// different Availability Zone. For the ConnectCustomKeyStore operation, the
-// CloudHSM must contain at least one active HSM.
-//
-// For information about the
-// requirements for an CloudHSM cluster that is associated with an CloudHSM key
-// store, see Assemble the Prerequisites
-// (https://docs.aws.amazon.com/kms/latest/developerguide/create-keystore.html#before-keystore)
+// For information about the requirements for an CloudHSM cluster that is
+// associated with an CloudHSM key store, see Assemble the Prerequisites (https://docs.aws.amazon.com/kms/latest/developerguide/create-keystore.html#before-keystore)
 // in the Key Management Service Developer Guide. For information about creating a
-// private subnet for an CloudHSM cluster, see Create a Private Subnet
-// (https://docs.aws.amazon.com/cloudhsm/latest/userguide/create-subnets.html) in
-// the CloudHSM User Guide. For information about cluster security groups, see
-// Configure a Default Security Group
-// (https://docs.aws.amazon.com/cloudhsm/latest/userguide/configure-sg.html) in the
-// CloudHSM User Guide .
+// private subnet for an CloudHSM cluster, see Create a Private Subnet (https://docs.aws.amazon.com/cloudhsm/latest/userguide/create-subnets.html)
+// in the CloudHSM User Guide. For information about cluster security groups, see
+// Configure a Default Security Group (https://docs.aws.amazon.com/cloudhsm/latest/userguide/configure-sg.html)
+// in the CloudHSM User Guide .
 type CloudHsmClusterInvalidConfigurationException struct {
 	Message *string
 
@@ -122,7 +110,7 @@ func (e *CloudHsmClusterInvalidConfigurationException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CloudHsmClusterInvalidConfigurationException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CloudHsmClusterInvalidConfigurationException"
 	}
 	return *e.ErrorCodeOverride
@@ -133,9 +121,8 @@ func (e *CloudHsmClusterInvalidConfigurationException) ErrorFault() smithy.Error
 
 // The request was rejected because the CloudHSM cluster associated with the
 // CloudHSM key store is not active. Initialize and activate the cluster and try
-// the command again. For detailed instructions, see Getting Started
-// (https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html) in
-// the CloudHSM User Guide.
+// the command again. For detailed instructions, see Getting Started (https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html)
+// in the CloudHSM User Guide.
 type CloudHsmClusterNotActiveException struct {
 	Message *string
 
@@ -154,7 +141,7 @@ func (e *CloudHsmClusterNotActiveException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CloudHsmClusterNotActiveException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CloudHsmClusterNotActiveException"
 	}
 	return *e.ErrorCodeOverride
@@ -181,7 +168,7 @@ func (e *CloudHsmClusterNotFoundException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CloudHsmClusterNotFoundException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CloudHsmClusterNotFoundException"
 	}
 	return *e.ErrorCodeOverride
@@ -195,8 +182,7 @@ func (e *CloudHsmClusterNotFoundException) ErrorFault() smithy.ErrorFault { retu
 // clusters that were created from a backup of the current cluster, and clusters
 // that were created from the same backup that produced the current cluster.
 // CloudHSM clusters that share a backup history have the same cluster certificate.
-// To view the cluster certificate of an CloudHSM cluster, use the DescribeClusters
-// (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
+// To view the cluster certificate of an CloudHSM cluster, use the DescribeClusters (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
 // operation.
 type CloudHsmClusterNotRelatedException struct {
 	Message *string
@@ -216,7 +202,7 @@ func (e *CloudHsmClusterNotRelatedException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CloudHsmClusterNotRelatedException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CloudHsmClusterNotRelatedException"
 	}
 	return *e.ErrorCodeOverride
@@ -247,41 +233,34 @@ func (e *CustomKeyStoreHasCMKsException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CustomKeyStoreHasCMKsException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CustomKeyStoreHasCMKsException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *CustomKeyStoreHasCMKsException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// The request was rejected because of the ConnectionState of the custom key store.
-// To get the ConnectionState of a custom key store, use the
+// The request was rejected because of the ConnectionState of the custom key
+// store. To get the ConnectionState of a custom key store, use the
 // DescribeCustomKeyStores operation. This exception is thrown under the following
 // conditions:
-//
-// * You requested the ConnectCustomKeyStore operation on a custom key
-// store with a ConnectionState of DISCONNECTING or FAILED. This operation is valid
-// for all other ConnectionState values. To reconnect a custom key store in a
-// FAILED state, disconnect it (DisconnectCustomKeyStore), then connect it
-// (ConnectCustomKeyStore).
-//
-// * You requested the CreateKey operation in a custom
-// key store that is not connected. This operations is valid only when the custom
-// key store ConnectionState is CONNECTED.
-//
-// * You requested the
-// DisconnectCustomKeyStore operation on a custom key store with a ConnectionState
-// of DISCONNECTING or DISCONNECTED. This operation is valid for all other
-// ConnectionState values.
-//
-// * You requested the UpdateCustomKeyStore or
-// DeleteCustomKeyStore operation on a custom key store that is not disconnected.
-// This operation is valid only when the custom key store ConnectionState is
-// DISCONNECTED.
-//
-// * You requested the GenerateRandom operation in an CloudHSM key
-// store that is not connected. This operation is valid only when the CloudHSM key
-// store ConnectionState is CONNECTED.
+//   - You requested the ConnectCustomKeyStore operation on a custom key store with
+//     a ConnectionState of DISCONNECTING or FAILED . This operation is valid for all
+//     other ConnectionState values. To reconnect a custom key store in a FAILED
+//     state, disconnect it ( DisconnectCustomKeyStore ), then connect it (
+//     ConnectCustomKeyStore ).
+//   - You requested the CreateKey operation in a custom key store that is not
+//     connected. This operations is valid only when the custom key store
+//     ConnectionState is CONNECTED .
+//   - You requested the DisconnectCustomKeyStore operation on a custom key store
+//     with a ConnectionState of DISCONNECTING or DISCONNECTED . This operation is
+//     valid for all other ConnectionState values.
+//   - You requested the UpdateCustomKeyStore or DeleteCustomKeyStore operation on
+//     a custom key store that is not disconnected. This operation is valid only when
+//     the custom key store ConnectionState is DISCONNECTED .
+//   - You requested the GenerateRandom operation in an CloudHSM key store that is
+//     not connected. This operation is valid only when the CloudHSM key store
+//     ConnectionState is CONNECTED .
 type CustomKeyStoreInvalidStateException struct {
 	Message *string
 
@@ -300,7 +279,7 @@ func (e *CustomKeyStoreInvalidStateException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CustomKeyStoreInvalidStateException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CustomKeyStoreInvalidStateException"
 	}
 	return *e.ErrorCodeOverride
@@ -330,7 +309,7 @@ func (e *CustomKeyStoreNameInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CustomKeyStoreNameInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CustomKeyStoreNameInUseException"
 	}
 	return *e.ErrorCodeOverride
@@ -357,7 +336,7 @@ func (e *CustomKeyStoreNotFoundException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *CustomKeyStoreNotFoundException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "CustomKeyStoreNotFoundException"
 	}
 	return *e.ErrorCodeOverride
@@ -384,7 +363,7 @@ func (e *DependencyTimeoutException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *DependencyTimeoutException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "DependencyTimeoutException"
 	}
 	return *e.ErrorCodeOverride
@@ -410,7 +389,7 @@ func (e *DisabledException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *DisabledException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "DisabledException"
 	}
 	return *e.ErrorCodeOverride
@@ -438,7 +417,7 @@ func (e *ExpiredImportTokenException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *ExpiredImportTokenException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "ExpiredImportTokenException"
 	}
 	return *e.ErrorCodeOverride
@@ -466,7 +445,7 @@ func (e *IncorrectKeyException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *IncorrectKeyException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "IncorrectKeyException"
 	}
 	return *e.ErrorCodeOverride
@@ -494,7 +473,7 @@ func (e *IncorrectKeyMaterialException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *IncorrectKeyMaterialException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "IncorrectKeyMaterialException"
 	}
 	return *e.ErrorCodeOverride
@@ -503,9 +482,9 @@ func (e *IncorrectKeyMaterialException) ErrorFault() smithy.ErrorFault { return 
 
 // The request was rejected because the trust anchor certificate in the request to
 // create an CloudHSM key store is not the trust anchor certificate for the
-// specified CloudHSM cluster. When you initialize the CloudHSM cluster
-// (https://docs.aws.amazon.com/cloudhsm/latest/userguide/initialize-cluster.html#sign-csr),
-// you create the trust anchor certificate and save it in the customerCA.crt file.
+// specified CloudHSM cluster. When you initialize the CloudHSM cluster (https://docs.aws.amazon.com/cloudhsm/latest/userguide/initialize-cluster.html#sign-csr)
+// , you create the trust anchor certificate and save it in the customerCA.crt
+// file.
 type IncorrectTrustAnchorException struct {
 	Message *string
 
@@ -524,7 +503,7 @@ func (e *IncorrectTrustAnchorException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *IncorrectTrustAnchorException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "IncorrectTrustAnchorException"
 	}
 	return *e.ErrorCodeOverride
@@ -550,7 +529,7 @@ func (e *InvalidAliasNameException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidAliasNameException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidAliasNameException"
 	}
 	return *e.ErrorCodeOverride
@@ -577,7 +556,7 @@ func (e *InvalidArnException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidArnException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidArnException"
 	}
 	return *e.ErrorCodeOverride
@@ -607,7 +586,7 @@ func (e *InvalidCiphertextException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidCiphertextException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidCiphertextException"
 	}
 	return *e.ErrorCodeOverride
@@ -633,7 +612,7 @@ func (e *InvalidGrantIdException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidGrantIdException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidGrantIdException"
 	}
 	return *e.ErrorCodeOverride
@@ -659,7 +638,7 @@ func (e *InvalidGrantTokenException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidGrantTokenException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidGrantTokenException"
 	}
 	return *e.ErrorCodeOverride
@@ -686,7 +665,7 @@ func (e *InvalidImportTokenException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidImportTokenException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidImportTokenException"
 	}
 	return *e.ErrorCodeOverride
@@ -694,21 +673,17 @@ func (e *InvalidImportTokenException) ErrorCode() string {
 func (e *InvalidImportTokenException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 // The request was rejected for one of the following reasons:
+//   - The KeyUsage value of the KMS key is incompatible with the API operation.
+//   - The encryption algorithm or signing algorithm specified for the operation
+//     is incompatible with the type of key material in the KMS key (KeySpec ).
 //
-// * The KeyUsage value
-// of the KMS key is incompatible with the API operation.
-//
-// * The encryption
-// algorithm or signing algorithm specified for the operation is incompatible with
-// the type of key material in the KMS key (KeySpec).
-//
-// For encrypting, decrypting,
-// re-encrypting, and generating data keys, the KeyUsage must be ENCRYPT_DECRYPT.
-// For signing and verifying messages, the KeyUsage must be SIGN_VERIFY. For
-// generating and verifying message authentication codes (MACs), the KeyUsage must
-// be GENERATE_VERIFY_MAC. To find the KeyUsage of a KMS key, use the DescribeKey
-// operation. To find the encryption or signing algorithms supported for a
-// particular KMS key, use the DescribeKey operation.
+// For encrypting, decrypting, re-encrypting, and generating data keys, the
+// KeyUsage must be ENCRYPT_DECRYPT . For signing and verifying messages, the
+// KeyUsage must be SIGN_VERIFY . For generating and verifying message
+// authentication codes (MACs), the KeyUsage must be GENERATE_VERIFY_MAC . To find
+// the KeyUsage of a KMS key, use the DescribeKey operation. To find the
+// encryption or signing algorithms supported for a particular KMS key, use the
+// DescribeKey operation.
 type InvalidKeyUsageException struct {
 	Message *string
 
@@ -727,7 +702,7 @@ func (e *InvalidKeyUsageException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidKeyUsageException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidKeyUsageException"
 	}
 	return *e.ErrorCodeOverride
@@ -754,7 +729,7 @@ func (e *InvalidMarkerException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *InvalidMarkerException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "InvalidMarkerException"
 	}
 	return *e.ErrorCodeOverride
@@ -781,15 +756,15 @@ func (e *KeyUnavailableException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *KeyUnavailableException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "KeyUnavailableException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *KeyUnavailableException) ErrorFault() smithy.ErrorFault { return smithy.FaultServer }
 
-// The request was rejected because an internal exception occurred. The request can
-// be retried.
+// The request was rejected because an internal exception occurred. The request
+// can be retried.
 type KMSInternalException struct {
 	Message *string
 
@@ -808,16 +783,16 @@ func (e *KMSInternalException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *KMSInternalException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "KMSInternalException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *KMSInternalException) ErrorFault() smithy.ErrorFault { return smithy.FaultServer }
 
-// The request was rejected because the HMAC verification failed. HMAC verification
-// fails when the HMAC computed by using the specified message, HMAC KMS key, and
-// MAC algorithm does not match the HMAC specified in the request.
+// The request was rejected because the HMAC verification failed. HMAC
+// verification fails when the HMAC computed by using the specified message, HMAC
+// KMS key, and MAC algorithm does not match the HMAC specified in the request.
 type KMSInvalidMacException struct {
 	Message *string
 
@@ -836,7 +811,7 @@ func (e *KMSInvalidMacException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *KMSInvalidMacException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "KMSInvalidMacException"
 	}
 	return *e.ErrorCodeOverride
@@ -864,7 +839,7 @@ func (e *KMSInvalidSignatureException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *KMSInvalidSignatureException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "KMSInvalidSignatureException"
 	}
 	return *e.ErrorCodeOverride
@@ -873,18 +848,13 @@ func (e *KMSInvalidSignatureException) ErrorFault() smithy.ErrorFault { return s
 
 // The request was rejected because the state of the specified resource is not
 // valid for this request. This exceptions means one of the following:
-//
-// * The key
-// state of the KMS key is not compatible with the operation. To find the key
-// state, use the DescribeKey operation. For more information about which key
-// states are compatible with each KMS operation, see Key states of KMS keys
-// (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html) in the
-// Key Management Service Developer Guide .
-//
-// * For cryptographic operations on KMS
-// keys in custom key stores, this exception represents a general failure with many
-// possible causes. To identify the cause, see the error message that accompanies
-// the exception.
+//   - The key state of the KMS key is not compatible with the operation. To find
+//     the key state, use the DescribeKey operation. For more information about which
+//     key states are compatible with each KMS operation, see Key states of KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html)
+//     in the Key Management Service Developer Guide .
+//   - For cryptographic operations on KMS keys in custom key stores, this
+//     exception represents a general failure with many possible causes. To identify
+//     the cause, see the error message that accompanies the exception.
 type KMSInvalidStateException struct {
 	Message *string
 
@@ -903,16 +873,16 @@ func (e *KMSInvalidStateException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *KMSInvalidStateException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "KMSInvalidStateException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *KMSInvalidStateException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// The request was rejected because a quota was exceeded. For more information, see
-// Quotas (https://docs.aws.amazon.com/kms/latest/developerguide/limits.html) in
-// the Key Management Service Developer Guide.
+// The request was rejected because a quota was exceeded. For more information,
+// see Quotas (https://docs.aws.amazon.com/kms/latest/developerguide/limits.html)
+// in the Key Management Service Developer Guide.
 type LimitExceededException struct {
 	Message *string
 
@@ -931,7 +901,7 @@ func (e *LimitExceededException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *LimitExceededException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "LimitExceededException"
 	}
 	return *e.ErrorCodeOverride
@@ -958,7 +928,7 @@ func (e *MalformedPolicyDocumentException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *MalformedPolicyDocumentException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "MalformedPolicyDocumentException"
 	}
 	return *e.ErrorCodeOverride
@@ -985,7 +955,7 @@ func (e *NotFoundException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *NotFoundException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "NotFoundException"
 	}
 	return *e.ErrorCodeOverride
@@ -1011,7 +981,7 @@ func (e *TagException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *TagException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "TagException"
 	}
 	return *e.ErrorCodeOverride
@@ -1038,16 +1008,16 @@ func (e *UnsupportedOperationException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *UnsupportedOperationException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "UnsupportedOperationException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *UnsupportedOperationException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// The request was rejected because the (XksKeyId) is already associated with a KMS
-// key in this external key store. Each KMS key in an external key store must be
-// associated with a different external key.
+// The request was rejected because the ( XksKeyId ) is already associated with a
+// KMS key in this external key store. Each KMS key in an external key store must
+// be associated with a different external key.
 type XksKeyAlreadyInUseException struct {
 	Message *string
 
@@ -1066,7 +1036,7 @@ func (e *XksKeyAlreadyInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksKeyAlreadyInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksKeyAlreadyInUseException"
 	}
 	return *e.ErrorCodeOverride
@@ -1095,7 +1065,7 @@ func (e *XksKeyInvalidConfigurationException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksKeyInvalidConfigurationException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksKeyInvalidConfigurationException"
 	}
 	return *e.ErrorCodeOverride
@@ -1104,13 +1074,13 @@ func (e *XksKeyInvalidConfigurationException) ErrorFault() smithy.ErrorFault {
 	return smithy.FaultClient
 }
 
-// The request was rejected because the external key store proxy could not find the
-// external key. This exception is thrown when the value of the XksKeyId parameter
-// doesn't identify a key in the external key manager associated with the external
-// key proxy. Verify that the XksKeyId represents an existing key in the external
-// key manager. Use the key identifier that the external key store proxy uses to
-// identify the key. For details, see the documentation provided with your external
-// key store proxy or key manager.
+// The request was rejected because the external key store proxy could not find
+// the external key. This exception is thrown when the value of the XksKeyId
+// parameter doesn't identify a key in the external key manager associated with the
+// external key proxy. Verify that the XksKeyId represents an existing key in the
+// external key manager. Use the key identifier that the external key store proxy
+// uses to identify the key. For details, see the documentation provided with your
+// external key store proxy or key manager.
 type XksKeyNotFoundException struct {
 	Message *string
 
@@ -1129,18 +1099,18 @@ func (e *XksKeyNotFoundException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksKeyNotFoundException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksKeyNotFoundException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *XksKeyNotFoundException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// The request was rejected because the proxy credentials failed to authenticate to
-// the specified external key store proxy. The specified external key store proxy
-// rejected a status request from KMS due to invalid credentials. This can indicate
-// an error in the credentials or in the identification of the external key store
-// proxy.
+// The request was rejected because the proxy credentials failed to authenticate
+// to the specified external key store proxy. The specified external key store
+// proxy rejected a status request from KMS due to invalid credentials. This can
+// indicate an error in the credentials or in the identification of the external
+// key store proxy.
 type XksProxyIncorrectAuthenticationCredentialException struct {
 	Message *string
 
@@ -1159,7 +1129,7 @@ func (e *XksProxyIncorrectAuthenticationCredentialException) ErrorMessage() stri
 	return *e.Message
 }
 func (e *XksProxyIncorrectAuthenticationCredentialException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyIncorrectAuthenticationCredentialException"
 	}
 	return *e.ErrorCodeOverride
@@ -1189,7 +1159,7 @@ func (e *XksProxyInvalidConfigurationException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyInvalidConfigurationException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyInvalidConfigurationException"
 	}
 	return *e.ErrorCodeOverride
@@ -1198,9 +1168,9 @@ func (e *XksProxyInvalidConfigurationException) ErrorFault() smithy.ErrorFault {
 	return smithy.FaultClient
 }
 
-// KMS cannot interpret the response it received from the external key store proxy.
-// The problem might be a poorly constructed response, but it could also be a
-// transient network issue. If you see this error repeatedly, report it to the
+// KMS cannot interpret the response it received from the external key store
+// proxy. The problem might be a poorly constructed response, but it could also be
+// a transient network issue. If you see this error repeatedly, report it to the
 // proxy vendor.
 type XksProxyInvalidResponseException struct {
 	Message *string
@@ -1220,17 +1190,17 @@ func (e *XksProxyInvalidResponseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyInvalidResponseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyInvalidResponseException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *XksProxyInvalidResponseException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// The request was rejected because the concatenation of the XksProxyUriEndpoint is
-// already associated with an external key store in the Amazon Web Services account
-// and Region. Each external key store in an account and Region must use a unique
-// external key store proxy address.
+// The request was rejected because the concatenation of the XksProxyUriEndpoint
+// is already associated with an external key store in the Amazon Web Services
+// account and Region. Each external key store in an account and Region must use a
+// unique external key store proxy address.
 type XksProxyUriEndpointInUseException struct {
 	Message *string
 
@@ -1249,7 +1219,7 @@ func (e *XksProxyUriEndpointInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyUriEndpointInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyUriEndpointInUseException"
 	}
 	return *e.ErrorCodeOverride
@@ -1278,14 +1248,14 @@ func (e *XksProxyUriInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyUriInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyUriInUseException"
 	}
 	return *e.ErrorCodeOverride
 }
 func (e *XksProxyUriInUseException) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
-// KMS was unable to reach the specified XksProxyUriPath. The path must be
+// KMS was unable to reach the specified XksProxyUriPath . The path must be
 // reachable before you create the external key store or update its settings. This
 // exception is also thrown when the external key store proxy response to a
 // GetHealthStatus request indicates that all external key manager instances are
@@ -1308,7 +1278,7 @@ func (e *XksProxyUriUnreachableException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyUriUnreachableException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyUriUnreachableException"
 	}
 	return *e.ErrorCodeOverride
@@ -1337,7 +1307,7 @@ func (e *XksProxyVpcEndpointServiceInUseException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyVpcEndpointServiceInUseException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyVpcEndpointServiceInUseException"
 	}
 	return *e.ErrorCodeOverride
@@ -1368,7 +1338,7 @@ func (e *XksProxyVpcEndpointServiceInvalidConfigurationException) ErrorMessage()
 	return *e.Message
 }
 func (e *XksProxyVpcEndpointServiceInvalidConfigurationException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyVpcEndpointServiceInvalidConfigurationException"
 	}
 	return *e.ErrorCodeOverride
@@ -1378,10 +1348,10 @@ func (e *XksProxyVpcEndpointServiceInvalidConfigurationException) ErrorFault() s
 }
 
 // The request was rejected because KMS could not find the specified VPC endpoint
-// service. Use DescribeCustomKeyStores to verify the VPC endpoint service name for
-// the external key store. Also, confirm that the Allow principals list for the VPC
-// endpoint service includes the KMS service principal for the Region, such as
-// cks.kms.us-east-1.amazonaws.com.
+// service. Use DescribeCustomKeyStores to verify the VPC endpoint service name
+// for the external key store. Also, confirm that the Allow principals list for
+// the VPC endpoint service includes the KMS service principal for the Region, such
+// as cks.kms.us-east-1.amazonaws.com .
 type XksProxyVpcEndpointServiceNotFoundException struct {
 	Message *string
 
@@ -1400,7 +1370,7 @@ func (e *XksProxyVpcEndpointServiceNotFoundException) ErrorMessage() string {
 	return *e.Message
 }
 func (e *XksProxyVpcEndpointServiceNotFoundException) ErrorCode() string {
-	if e.ErrorCodeOverride == nil {
+	if e == nil || e.ErrorCodeOverride == nil {
 		return "XksProxyVpcEndpointServiceNotFoundException"
 	}
 	return *e.ErrorCodeOverride

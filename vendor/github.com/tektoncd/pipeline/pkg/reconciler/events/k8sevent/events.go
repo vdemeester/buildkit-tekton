@@ -30,7 +30,7 @@ func CheckEventsOrdered(t *testing.T, eventChan chan string, testName string, wa
 	t.Helper()
 	err := eventsFromChannel(eventChan, wantEvents)
 	if err != nil {
-		return fmt.Errorf("error in test %s: %v", testName, err)
+		return fmt.Errorf("error in test %s: %w", testName, err)
 	}
 	return nil
 }
@@ -54,13 +54,18 @@ func eventsFromChannel(c chan string, wantEvents []string) error {
 		case event := <-c:
 			foundEvents = append(foundEvents, event)
 			wantEvent := wantEvents[ii]
+			// If the event is an exact match, there is no need to use regular expressions for matching.
+			// This can avoid the need to escape special characters, such as *, in the event to match.
+			if wantEvent == event {
+				continue
+			}
 			matching, err := regexp.MatchString(wantEvent, event)
 			if err == nil {
 				if !matching {
 					return fmt.Errorf("expected event \"%s\" but got \"%s\" instead", wantEvent, event)
 				}
 			} else {
-				return fmt.Errorf("something went wrong matching the event: %s", err)
+				return fmt.Errorf("something went wrong matching the event: %w", err)
 			}
 		case <-timer:
 			return fmt.Errorf("received %d events but %d expected. Found events: %#v", len(foundEvents), len(wantEvents), foundEvents)

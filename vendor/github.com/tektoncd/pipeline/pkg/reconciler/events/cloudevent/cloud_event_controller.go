@@ -24,7 +24,6 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/events/cache"
 	corev1 "k8s.io/api/core/v1"
@@ -35,16 +34,23 @@ import (
 	"knative.dev/pkg/logging"
 )
 
+func cloudEventsSink(ctx context.Context) string {
+	configs := config.FromContextOrDefaults(ctx)
+	// Try the sink configuration first
+	sink := configs.Events.Sink
+	if sink == "" {
+		// Fall back to the deprecated flag is the new one is not set
+		// This ensures no changes in behaviour for existing users of the deprecated flag
+		sink = configs.Defaults.DefaultCloudEventsSink
+	}
+	return sink
+}
+
 // EmitCloudEvents emits CloudEvents (only) for object
 func EmitCloudEvents(ctx context.Context, object runtime.Object) {
 	logger := logging.FromContext(ctx)
-	configs := config.FromContextOrDefaults(ctx)
-	sendCloudEvents := (configs.Defaults.DefaultCloudEventsSink != "")
-	if sendCloudEvents {
-		ctx = cloudevents.ContextWithTarget(ctx, configs.Defaults.DefaultCloudEventsSink)
-	}
-
-	if sendCloudEvents {
+	if sink := cloudEventsSink(ctx); sink != "" {
+		ctx = cloudevents.ContextWithTarget(ctx, sink)
 		err := SendCloudEventWithRetries(ctx, object)
 		if err != nil {
 			logger.Warnf("Failed to emit cloud events %v", err.Error())
@@ -55,13 +61,9 @@ func EmitCloudEvents(ctx context.Context, object runtime.Object) {
 // EmitCloudEventsWhenConditionChange emits CloudEvents when there is a change in condition
 func EmitCloudEventsWhenConditionChange(ctx context.Context, beforeCondition *apis.Condition, afterCondition *apis.Condition, object runtime.Object) {
 	logger := logging.FromContext(ctx)
-	configs := config.FromContextOrDefaults(ctx)
-	sendCloudEvents := (configs.Defaults.DefaultCloudEventsSink != "")
-	if sendCloudEvents {
-		ctx = cloudevents.ContextWithTarget(ctx, configs.Defaults.DefaultCloudEventsSink)
-	}
+	if sink := cloudEventsSink(ctx); sink != "" {
+		ctx = cloudevents.ContextWithTarget(ctx, sink)
 
-	if sendCloudEvents {
 		// Only send events if the new condition represents a change
 		if !equality.Semantic.DeepEqual(beforeCondition, afterCondition) {
 			err := SendCloudEventWithRetries(ctx, object)
@@ -91,14 +93,13 @@ func SendCloudEventWithRetries(ctx context.Context, object runtime.Object) error
 	if ceClient == nil {
 		return errors.New("no cloud events client found in the context")
 	}
-	event, err := eventForObjectWithCondition(o)
+	event, err := eventForObjectWithCondition(ctx, o)
 	if err != nil {
 		return err
 	}
-	// Events for Runs require a cache of events that have been sent
-	_, isRun := object.(*v1alpha1.Run)
+	// Events for CustomRuns require a cache of events that have been sent
 	_, isCustomRun := object.(*v1beta1.CustomRun)
-	if isRun || isCustomRun {
+	if isCustomRun {
 		cacheClient = cache.Get(ctx)
 	}
 
@@ -110,7 +111,7 @@ func SendCloudEventWithRetries(ctx context.Context, object runtime.Object) error
 		wasIn <- nil
 		logger.Debugf("Sending cloudevent of type %q", event.Type())
 		// In case of Run event, check cache if cloudevent is already sent
-		if isRun || isCustomRun {
+		if isCustomRun {
 			cloudEventSent, err := cache.ContainsOrAddCloudEvent(cacheClient, event)
 			if err != nil {
 				logger.Errorf("error while checking cache: %s", err)

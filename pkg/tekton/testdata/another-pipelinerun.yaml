@@ -14,7 +14,7 @@ roleRef:
   name: cluster-admin
   apiGroup: rbac.authorization.k8s.io
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: "unit.tests"
@@ -39,7 +39,7 @@ spec:
 # Copied from https://github.com/tektoncd/catalog/blob/v1beta1/git/git-clone.yaml
 # With a few fixes being ported over in https://github.com/tektoncd/catalog/pull/290
 # Post #1839 we can refer to the remote Task in a registry or post #2298 in git directly
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: git-clone
@@ -120,7 +120,7 @@ spec:
 # Copied from https://github.com/tektoncd/catalog/blob/v1beta1/kaniko/kaniko.yaml
 # with a few fixes that will be port over in https://github.com/tektoncd/catalog/pull/291
 # Post #1839 we can refer to the remote Task in a registry or post #2298 in git directly
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: kaniko
@@ -186,7 +186,7 @@ spec:
       cat $(params.CONTEXT)/image-digested | jq '.[0].value' -rj | tee /tekton/results/IMAGE_DIGEST
 ---
 # This task deploys with kubectl apply -f <filename>
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: demo-deploy-kubectl
@@ -223,7 +223,7 @@ spec:
 ---
 # This Pipeline Builds two microservice images(https://github.com/GoogleContainerTools/skaffold/tree/master/examples/microservices)
 # from the Skaffold repo (https://github.com/GoogleContainerTools/skaffold) and deploys them to the repo currently running Tekton Pipelines.
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: "demo.pipeline"
@@ -311,7 +311,7 @@ spec:
     - name: source
       workspace: git-source
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   name: demo-pipeline-run-1

@@ -87,7 +87,7 @@ not a valid yaml`},
 		{yaml: "kind: Task"},
 		{yaml: `apiVersion: foo.bar/baz
 kind: Foo`},
-		{yaml: `apiVersion: tekton.dev/v1beta1
+		{yaml: `apiVersion: tekton.dev/v1
 kind: Task
 spec:
   steps: "foo"`},
@@ -113,23 +113,23 @@ func TestParseTektonYAML(t *testing.T) {
 		yaml     string
 		expected interface{}
 	}{{
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: Task`,
 		expected: &v1beta1.Task{},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: TaskRun`,
 		expected: &v1beta1.TaskRun{},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: Pipeline`,
 		expected: &v1beta1.Pipeline{},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: PipelineRun`,
 		expected: &v1beta1.PipelineRun{},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: foo
@@ -153,7 +153,7 @@ spec:
 			},
 		},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: TaskRun
 spec:
   taskRef:
@@ -166,7 +166,7 @@ spec:
 			},
 		},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: bar
@@ -187,7 +187,7 @@ spec:
 			},
 		},
 	}, {
-		yaml: `apiVersion: tekton.dev/v1beta1
+		yaml: `apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: bar-

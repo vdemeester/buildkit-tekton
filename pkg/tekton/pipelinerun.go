@@ -191,9 +191,10 @@ func validatePipelineRun(ctx context.Context, pr *v1.PipelineRun) error {
 	// SilentlyIgnore ServiceAccountName
 	// SilentlyIgnore ServiceAccountNames
 	// SilentlyIgnore Status
-	if pr.Spec.Timeouts != nil {
-		return errors.New("Timeouts are not supported")
-	}
+	// SilentryIgnore Timeouts
+	// if pr.Spec.Timeouts != nil {
+	// 	return errors.New("Timeouts are not supported")
+	// }
 	// We might be able to silently ignore
 	if pr.Spec.TaskRunTemplate.PodTemplate != nil {
 		return errors.New("PodTemplate are not supported")
@@ -233,5 +234,5 @@ func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 
 func isTektonTask(typeMeta runtime.TypeMeta) bool {
 	return (typeMeta.APIVersion == "" && typeMeta.Kind == "") ||
-		(typeMeta.APIVersion == "tekton.dev/v1beta1" && typeMeta.Kind == "Task")
+		(typeMeta.APIVersion == "tekton.dev/v1" && typeMeta.Kind == "Task")
 }

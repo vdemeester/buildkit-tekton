@@ -1,5 +1,5 @@
 #syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: TaskRun
 metadata:
   name: golang-test-pipeline-run

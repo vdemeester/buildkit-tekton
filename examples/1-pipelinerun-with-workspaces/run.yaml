@@ -45,7 +45,7 @@ spec:
   accessModes:
     - ReadWriteOnce
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: fetch-secure-data
@@ -65,7 +65,7 @@ spec:
         exit 1
       fi
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: print-data
@@ -80,7 +80,7 @@ spec:
     image: ubuntu
     script: cat $(workspaces.storage.path)/$(params.filename)
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: fetch-and-print-recipe
@@ -113,7 +113,7 @@ spec:
     - name: storage
       workspace: shared-data
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: recipe-time-

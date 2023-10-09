@@ -26,7 +26,7 @@
 #           \                         /
 #             -- (lower) ------------
 
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: parallel-pipeline
@@ -93,7 +93,7 @@ spec:
         - name: files
           workspace: ws
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: persist-param
@@ -111,7 +111,7 @@ spec:
   workspaces:
     - name: task-ws
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: to-upper
@@ -132,7 +132,7 @@ spec:
   workspaces:
     - name: w
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: to-lower
@@ -153,7 +153,7 @@ spec:
   workspaces:
     - name: w
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: result-reporter
@@ -169,7 +169,7 @@ spec:
       image: ubuntu
       script: echo $(params.result-to-report)
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: validator
@@ -184,7 +184,7 @@ spec:
   workspaces:
     - name: files
 ---
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: parallel-pipelinerun-

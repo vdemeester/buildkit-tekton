@@ -1,5 +1,5 @@
 #syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   annotations:
@@ -44,7 +44,7 @@ spec:
       taskSpec:
         steps:
           - name: unit-test
-            image: docker.io/library/golang:1.17
+            image: docker.io/library/golang:1.20
             script: |
               pwd; ls -la; ls -la *; echo $PATH
               go test ./...

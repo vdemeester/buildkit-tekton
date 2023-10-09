@@ -19,93 +19,110 @@ package trustedresources
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 
 	"github.com/sigstore/sigstore/pkg/signature"
+	"github.com/tektoncd/pipeline/pkg/apis/config"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/trustedresources/verifier"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"knative.dev/pkg/apis"
+	"knative.dev/pkg/logging"
 )
 
 const (
 	// SignatureAnnotation is the key of signature in annotation map
 	SignatureAnnotation = "tekton.dev/signature"
+	// ConditionTrustedResourcesVerified specifies that the resources pass trusted resources verification or not.
+	ConditionTrustedResourcesVerified apis.ConditionType = "TrustedResourcesVerified"
 )
 
-// VerifyTask verifies the signature and public key against task.
-// source is from ConfigSource.URI, which will be used to match policy patterns. k8s is used to fetch secret from cluster
-func VerifyTask(ctx context.Context, taskObj v1beta1.TaskObject, k8s kubernetes.Interface, source string, policies []*v1alpha1.VerificationPolicy) error {
-	tm, signature, err := prepareObjectMeta(taskObj.TaskMetadata())
-	if err != nil {
-		return err
-	}
-	task := v1beta1.Task{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "tekton.dev/v1beta1",
-			Kind:       "Task"},
-		ObjectMeta: tm,
-		Spec:       taskObj.TaskSpec(),
-	}
+const (
+	VerificationSkip = iota
+	VerificationPass
+	VerificationWarn
+	VerificationError
+)
 
-	return verifyResource(ctx, &task, k8s, signature, source, policies)
+type Hashable interface {
+	Checksum() ([]byte, error)
 }
 
-// VerifyPipeline verifies the signature and public key against pipeline.
-// source is from ConfigSource.URI, which will be used to match policy patterns, k8s is used to fetch secret from cluster
-func VerifyPipeline(ctx context.Context, pipelineObj v1beta1.PipelineObject, k8s kubernetes.Interface, source string, policies []*v1alpha1.VerificationPolicy) error {
-	pm, signature, err := prepareObjectMeta(pipelineObj.PipelineMetadata())
-	if err != nil {
-		return err
-	}
-	pipeline := v1beta1.Pipeline{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "tekton.dev/v1beta1",
-			Kind:       "Pipeline"},
-		ObjectMeta: pm,
-		Spec:       pipelineObj.PipelineSpec(),
-	}
+// VerificationResultType indicates different cases of a verification result
+type VerificationResultType int
 
-	return verifyResource(ctx, &pipeline, k8s, signature, source, policies)
+// VerificationResult contains the type and message about the result of verification
+type VerificationResult struct {
+	// VerificationResultType has 4 types which is corresponding to 4 cases:
+	// 0 (VerificationSkip): The verification was skipped. Err is nil in this case.
+	// 1 (VerificationPass): The verification passed. Err is nil in this case.
+	// 2 (VerificationWarn): A warning is logged. It could be no matching policies and feature flag "no-match-policy" is "warn", or only Warn mode verification policies fail.
+	// 3 (VerificationError): The verification failed, it could be the signature doesn't match the public key, no matching policies and "no-match-policy" is set to "fail" or there are errors during verification.
+	VerificationResultType VerificationResultType
+	// Err contains the error message when there is a warning logged or error returned.
+	Err error
 }
 
-// verifyResource verifies resource which implements metav1.Object by provided signature and public keys from configmap or policies.
-// It will fetch public key from configmap first, if no keys are found then try to fetch keys from VerificationPolicy
-// For verificationPolicies verifyResource will adopt the following rules to do verification:
-// 1. For each policy, check if the resource url is matching any of the `patterns` in the `resources` list. If matched then this policy will be used for verification.
-// 2. If multiple policies are matched, the resource needs to pass all of them to pass verification.
-// 3. To pass one policy, the resource can pass any public keys in the policy.
-func verifyResource(ctx context.Context, resource metav1.Object, k8s kubernetes.Interface, signature []byte, source string, policies []*v1alpha1.VerificationPolicy) error {
-	verifiers, err := verifier.FromConfigMap(ctx, k8s)
-	if err != nil && !errors.Is(err, verifier.ErrorEmptyPublicKeys) {
-		return fmt.Errorf("failed to get verifiers from configmap: %w", err)
+// VerifyResource verifies the signature and public key against resource (v1beta1 and v1 task and pipeline).
+// VerificationResult is returned with different types for different cases:
+// 1) Return VerificationResult with VerificationSkip type, when no policies are found and no-match-policy is set to ignore
+// 2) Return VerificationResult with VerificationPass type when verification passed;
+// 3) Return VerificationResult with VerificationWarn type, when no matching policies and feature flag "no-match-policy" is "warn", or only Warn mode verification policies fail. Err field is filled with the warning;
+// 4) Return VerificationResult with VerificationError type when no policies are found and no-match-policy is set to fail, the resource fails to pass matched enforce verification policy, or there are errors during verification. Err is filled with the err.
+// refSource contains the source information of the resource.
+func VerifyResource(ctx context.Context, resource metav1.Object, k8s kubernetes.Interface, refSource *v1.RefSource, verificationpolicies []*v1alpha1.VerificationPolicy) VerificationResult {
+	var refSourceURI string
+	if refSource != nil {
+		refSourceURI = refSource.URI
 	}
-	if len(verifiers) != 0 {
-		for _, verifier := range verifiers {
-			// if one of the verifier passes verification, then this resource passes verification
-			if err := verifyInterface(resource, verifier, signature); err == nil {
-				return nil
+
+	matchedPolicies, err := getMatchedPolicies(resource.GetName(), refSourceURI, verificationpolicies)
+	if err != nil {
+		if errors.Is(err, ErrNoMatchedPolicies) {
+			switch config.GetVerificationNoMatchPolicy(ctx) {
+			case config.IgnoreNoMatchPolicy:
+				return VerificationResult{VerificationResultType: VerificationSkip}
+			case config.WarnNoMatchPolicy:
+				logger := logging.FromContext(ctx)
+				warning := fmt.Errorf("failed to get matched policies: %w", err)
+				logger.Warnf(warning.Error())
+				return VerificationResult{VerificationResultType: VerificationWarn, Err: warning}
 			}
 		}
-		return fmt.Errorf("%w: resource %s in namespace %s fails verification", ErrorResourceVerificationFailed, resource.GetName(), resource.GetNamespace())
+		return VerificationResult{VerificationResultType: VerificationError, Err: fmt.Errorf("failed to get matched policies: %w", err)}
 	}
-
-	if len(policies) == 0 {
-		return ErrorEmptyVerificationConfig
+	signature, err := extractSignature(resource)
+	if err != nil {
+		return VerificationResult{VerificationResultType: VerificationError, Err: err}
 	}
+	return verifyResource(ctx, resource, k8s, signature, matchedPolicies)
+}
 
+// VerifyTask is the deprecated, this is to keep backward compatibility
+func VerifyTask(ctx context.Context, taskObj *v1beta1.Task, k8s kubernetes.Interface, refSource *v1.RefSource, verificationpolicies []*v1alpha1.VerificationPolicy) VerificationResult {
+	return VerifyResource(ctx, taskObj, k8s, refSource, verificationpolicies)
+}
+
+// VerifyPipeline is the deprecated, this is to keep backward compatibility
+func VerifyPipeline(ctx context.Context, pipelineObj *v1beta1.Pipeline, k8s kubernetes.Interface, refSource *v1.RefSource, verificationpolicies []*v1alpha1.VerificationPolicy) VerificationResult {
+	return VerifyResource(ctx, pipelineObj, k8s, refSource, verificationpolicies)
+}
+
+// getMatchedPolicies filters out the policies by checking if the resource url (source) is matching any of the `patterns` in the `resources` list.
+func getMatchedPolicies(resourceName string, source string, policies []*v1alpha1.VerificationPolicy) ([]*v1alpha1.VerificationPolicy, error) {
 	matchedPolicies := []*v1alpha1.VerificationPolicy{}
 	for _, p := range policies {
 		for _, r := range p.Spec.Resources {
 			matching, err := regexp.MatchString(r.Pattern, source)
 			if err != nil {
-				return fmt.Errorf("%v: %w", err, ErrorRegexMatch)
+				// FixMe: changing %v to %w breaks integration tests.
+				return matchedPolicies, fmt.Errorf("%v: %w", err, ErrRegexMatch) //nolint:errorlint
 			}
 			if matching {
 				matchedPolicies = append(matchedPolicies, p)
@@ -114,86 +131,111 @@ func verifyResource(ctx context.Context, resource metav1.Object, k8s kubernetes.
 		}
 	}
 	if len(matchedPolicies) == 0 {
-		return fmt.Errorf("%w: no matching policies are found for resource: %s against source: %s", ErrorNoMatchedPolicies, resource.GetName(), source)
+		return matchedPolicies, fmt.Errorf("%w: no matching policies are found for resource: %s against source: %s", ErrNoMatchedPolicies, resourceName, source)
+	}
+	return matchedPolicies, nil
+}
+
+// verifyResource verifies resource which implements metav1.Object by provided signature and public keys from verification policies.
+// For matched policies, `verifyResource“ will adopt the following rules to do verification:
+//  1. If multiple policies match, the resource must satisfy all the "enforce" policies to pass verification. The matching "enforce" policies are evaluated using AND logic.
+//     Alternatively, if the resource only matches policies in "warn" mode, it will still pass verification and only log a warning if these policies are not satisfied.
+//  2. To pass one policy, the resource can pass any public keys in the policy. We use OR logic on public keys of one policy.
+//
+// TODO(#6683): return all failed policies in error.
+func verifyResource(ctx context.Context, resource metav1.Object, k8s kubernetes.Interface, signature []byte, matchedPolicies []*v1alpha1.VerificationPolicy) VerificationResult {
+	logger := logging.FromContext(ctx)
+	var warnPolicies []*v1alpha1.VerificationPolicy
+	var enforcePolicies []*v1alpha1.VerificationPolicy
+	for _, p := range matchedPolicies {
+		if p.Spec.Mode == v1alpha1.ModeWarn {
+			warnPolicies = append(warnPolicies, p)
+		} else {
+			enforcePolicies = append(enforcePolicies, p)
+		}
 	}
 
-	for _, p := range matchedPolicies {
-		passVerification := false
+	// get the checksum of the resource
+	checksumBytes, err := getChecksum(resource)
+	if err != nil {
+		return VerificationResult{VerificationResultType: VerificationError, Err: err}
+	}
+
+	// first evaluate all enforce policies. Return VerificationError type of VerificationResult if any policy fails.
+	for _, p := range enforcePolicies {
 		verifiers, err := verifier.FromPolicy(ctx, k8s, p)
 		if err != nil {
-			return fmt.Errorf("failed to get verifiers from policy: %w", err)
+			return VerificationResult{VerificationResultType: VerificationError, Err: fmt.Errorf("failed to get verifiers from policy: %w", err)}
 		}
-		for _, verifier := range verifiers {
-			// if one of the verifier passes verification, then this policy passes verification
-			if err := verifyInterface(resource, verifier, signature); err == nil {
-				passVerification = true
-				break
-			}
-		}
-		// if this policy fails the verification, should return error directly. No need to check other policies
+		passVerification := doesAnyVerifierPass(ctx, checksumBytes, signature, verifiers)
 		if !passVerification {
-			return fmt.Errorf("%w: resource %s in namespace %s fails verification", ErrorResourceVerificationFailed, resource.GetName(), resource.GetNamespace())
-		}
-	}
-	return nil
-}
-
-// verifyInterface get the checksum of json marshalled object and verify it.
-func verifyInterface(obj interface{}, verifier signature.Verifier, signature []byte) error {
-	ts, err := json.Marshal(obj)
-	if err != nil {
-		return fmt.Errorf("failed to marshal the object: %w", err)
-	}
-
-	h := sha256.New()
-	h.Write(ts)
-
-	if err := verifier.VerifySignature(bytes.NewReader(signature), bytes.NewReader(h.Sum(nil))); err != nil {
-		return fmt.Errorf("%w:%v", ErrorResourceVerificationFailed, err.Error())
-	}
-
-	return nil
-}
-
-// prepareObjectMeta will remove annotations not configured from user side -- "kubectl-client-side-apply" and "kubectl.kubernetes.io/last-applied-configuration"
-// to avoid verification failure and extract the signature.
-func prepareObjectMeta(in metav1.ObjectMeta) (metav1.ObjectMeta, []byte, error) {
-	out := metav1.ObjectMeta{}
-
-	// exclude the fields populated by system.
-	out.Name = in.Name
-	out.GenerateName = in.GenerateName
-	out.Namespace = in.Namespace
-
-	if in.Labels != nil {
-		out.Labels = make(map[string]string)
-		for k, v := range in.Labels {
-			out.Labels[k] = v
+			return VerificationResult{VerificationResultType: VerificationError, Err: fmt.Errorf("%w: resource %s in namespace %s fails verification", ErrResourceVerificationFailed, resource.GetName(), resource.GetNamespace())}
 		}
 	}
 
-	out.Annotations = make(map[string]string)
-	for k, v := range in.Annotations {
-		out.Annotations[k] = v
+	// then evaluate all warn policies. Return VerificationWarn type of VerificationResult if any warn policies fails.
+	for _, p := range warnPolicies {
+		verifiers, err := verifier.FromPolicy(ctx, k8s, p)
+		if err != nil {
+			warn := fmt.Errorf("failed to get verifiers for resource %s from namespace %s: %w", resource.GetName(), resource.GetNamespace(), err)
+			logger.Warnf(warn.Error())
+			return VerificationResult{VerificationResultType: VerificationWarn, Err: warn}
+		}
+		passVerification := doesAnyVerifierPass(ctx, checksumBytes, signature, verifiers)
+		if !passVerification {
+			warn := fmt.Errorf("%w: resource %s in namespace %s fails verification", ErrResourceVerificationFailed, resource.GetName(), resource.GetNamespace())
+			logger.Warnf(warn.Error())
+			return VerificationResult{VerificationResultType: VerificationWarn, Err: warn}
+		}
 	}
 
-	// exclude the annotations added by other components
-	// Task annotations are unlikely to be changed, we need to make sure other components
-	// like resolver doesn't modify the annotations, otherwise the verification will fail
-	delete(out.Annotations, "kubectl-client-side-apply")
-	delete(out.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	return VerificationResult{VerificationResultType: VerificationPass}
+}
 
+// doesAnyVerifierPass loop over verifiers to verify the checksum and the signature, return true if any verifier pass verification.
+func doesAnyVerifierPass(ctx context.Context, checksumBytes []byte, signature []byte, verifiers []signature.Verifier) bool {
+	logger := logging.FromContext(ctx)
+	passVerification := false
+	for _, verifier := range verifiers {
+		if err := verifier.VerifySignature(bytes.NewReader(signature), bytes.NewReader(checksumBytes)); err == nil {
+			// if one of the verifier passes verification, then this policy passes verification
+			passVerification = true
+			break
+		} else {
+			// FixMe: changing %v to %w breaks integration tests.
+			warn := fmt.Errorf("%w:%v", ErrResourceVerificationFailed, err.Error())
+			logger.Warnf(warn.Error())
+		}
+	}
+	return passVerification
+}
+
+// extractSignature extracts the signature if it is present in the metadata.
+// Returns a non-nil error if the signature cannot be decoded.
+func extractSignature(in metav1.Object) ([]byte, error) {
 	// signature should be contained in annotation
-	sig, ok := in.Annotations[SignatureAnnotation]
+	sig, ok := in.GetAnnotations()[SignatureAnnotation]
 	if !ok {
-		return out, nil, ErrorSignatureMissing
+		return nil, nil
 	}
 	// extract signature
 	signature, err := base64.StdEncoding.DecodeString(sig)
 	if err != nil {
-		return out, nil, err
+		return nil, err
 	}
-	delete(out.Annotations, SignatureAnnotation)
+	return signature, nil
+}
 
-	return out, signature, nil
+// getChecksum gets the sha256 checksum of the resource.
+// Returns a non-nil error if the checksum cannot be computed or the resource is of unknown type.
+func getChecksum(resource metav1.Object) ([]byte, error) {
+	h, ok := resource.(Hashable)
+	if !ok {
+		return nil, fmt.Errorf("%w: resource %T is not a Hashable type", ErrResourceNotSupported, resource)
+	}
+	checksumBytes, err := h.Checksum()
+	if err != nil {
+		return nil, err
+	}
+	return checksumBytes, nil
 }

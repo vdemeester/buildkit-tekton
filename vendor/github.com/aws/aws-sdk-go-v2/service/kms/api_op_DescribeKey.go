@@ -4,72 +4,58 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // Provides detailed information about a KMS key. You can run DescribeKey on a
-// customer managed key
-// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#customer-cmk)
-// or an Amazon Web Services managed key
-// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk).
-// This detailed information includes the key ARN, creation date (and deletion
+// customer managed key (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#customer-cmk)
+// or an Amazon Web Services managed key (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk)
+// . This detailed information includes the key ARN, creation date (and deletion
 // date, if applicable), the key state, and the origin and expiration date (if any)
-// of the key material. It includes fields, like KeySpec, that help you distinguish
-// different types of KMS keys. It also displays the key usage (encryption,
-// signing, or generating and verifying MACs) and the algorithms that the KMS key
-// supports. For multi-Region keys, DescribeKey displays the primary key and all
-// related replica keys. For KMS keys in CloudHSM key stores, it includes
-// information about the key store, such as the key store ID and the CloudHSM
-// cluster ID. For KMS keys in external key stores, it includes the custom key
-// store ID and the ID of the external key. DescribeKey does not return the
-// following information:
+// of the key material. It includes fields, like KeySpec , that help you
+// distinguish different types of KMS keys. It also displays the key usage
+// (encryption, signing, or generating and verifying MACs) and the algorithms that
+// the KMS key supports. For multi-Region keys , DescribeKey displays the primary
+// key and all related replica keys. For KMS keys in CloudHSM key stores , it
+// includes information about the key store, such as the key store ID and the
+// CloudHSM cluster ID. For KMS keys in external key stores , it includes the
+// custom key store ID and the ID of the external key. DescribeKey does not return
+// the following information:
+//   - Aliases associated with the KMS key. To get this information, use
+//     ListAliases .
+//   - Whether automatic key rotation is enabled on the KMS key. To get this
+//     information, use GetKeyRotationStatus . Also, some key states prevent a KMS
+//     key from being automatically rotated. For details, see How Automatic Key
+//     Rotation Works (https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html#rotate-keys-how-it-works)
+//     in the Key Management Service Developer Guide.
+//   - Tags on the KMS key. To get this information, use ListResourceTags .
+//   - Key policies and grants on the KMS key. To get this information, use
+//     GetKeyPolicy and ListGrants .
 //
-// * Aliases associated with the KMS key. To get this
-// information, use ListAliases.
-//
-// * Whether automatic key rotation is enabled on
-// the KMS key. To get this information, use GetKeyRotationStatus. Also, some key
-// states prevent a KMS key from being automatically rotated. For details, see How
-// Automatic Key Rotation Works
-// (https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html#rotate-keys-how-it-works)
-// in the Key Management Service Developer Guide.
-//
-// * Tags on the KMS key. To get
-// this information, use ListResourceTags.
-//
-// * Key policies and grants on the KMS
-// key. To get this information, use GetKeyPolicy and ListGrants.
-//
-// In general,
-// DescribeKey is a non-mutating operation. It returns data about KMS keys, but
-// doesn't change them. However, Amazon Web Services services use DescribeKey to
-// create Amazon Web Services managed keys
-// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk)
+// In general, DescribeKey is a non-mutating operation. It returns data about KMS
+// keys, but doesn't change them. However, Amazon Web Services services use
+// DescribeKey to create Amazon Web Services managed keys (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk)
 // from a predefined Amazon Web Services alias with no key ID. Cross-account use:
 // Yes. To perform this operation with a KMS key in a different Amazon Web Services
 // account, specify the key ARN or alias ARN in the value of the KeyId parameter.
-// Required permissions: kms:DescribeKey
-// (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
+// Required permissions: kms:DescribeKey (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
 // (key policy) Related operations:
-//
-// * GetKeyPolicy
-//
-// * GetKeyRotationStatus
-//
-// *
-// ListAliases
-//
-// * ListGrants
-//
-// * ListKeys
-//
-// * ListResourceTags
-//
-// * ListRetirableGrants
+//   - GetKeyPolicy
+//   - GetKeyRotationStatus
+//   - ListAliases
+//   - ListGrants
+//   - ListKeys
+//   - ListResourceTags
+//   - ListRetirableGrants
 func (c *Client) DescribeKey(ctx context.Context, params *DescribeKeyInput, optFns ...func(*Options)) (*DescribeKeyOutput, error) {
 	if params == nil {
 		params = &DescribeKeyInput{}
@@ -87,40 +73,28 @@ func (c *Client) DescribeKey(ctx context.Context, params *DescribeKeyInput, optF
 
 type DescribeKeyInput struct {
 
-	// Describes the specified KMS key. If you specify a predefined Amazon Web Services
-	// alias (an Amazon Web Services alias with no key ID), KMS associates the alias
-	// with an Amazon Web Services managed key
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html##aws-managed-cmk)
-	// and returns its KeyId and Arn in the response. To specify a KMS key, use its key
-	// ID, key ARN, alias name, or alias ARN. When using an alias name, prefix it with
-	// "alias/". To specify a KMS key in a different Amazon Web Services account, you
-	// must use the key ARN or alias ARN. For example:
-	//
-	// * Key ID:
-	// 1234abcd-12ab-34cd-56ef-1234567890ab
-	//
-	// * Key ARN:
-	// arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
-	//
-	// *
-	// Alias name: alias/ExampleAlias
-	//
-	// * Alias ARN:
-	// arn:aws:kms:us-east-2:111122223333:alias/ExampleAlias
-	//
-	// To get the key ID and key
-	// ARN for a KMS key, use ListKeys or DescribeKey. To get the alias name and alias
-	// ARN, use ListAliases.
+	// Describes the specified KMS key. If you specify a predefined Amazon Web
+	// Services alias (an Amazon Web Services alias with no key ID), KMS associates the
+	// alias with an Amazon Web Services managed key (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html##aws-managed-cmk)
+	// and returns its KeyId and Arn in the response. To specify a KMS key, use its
+	// key ID, key ARN, alias name, or alias ARN. When using an alias name, prefix it
+	// with "alias/" . To specify a KMS key in a different Amazon Web Services account,
+	// you must use the key ARN or alias ARN. For example:
+	//   - Key ID: 1234abcd-12ab-34cd-56ef-1234567890ab
+	//   - Key ARN:
+	//   arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
+	//   - Alias name: alias/ExampleAlias
+	//   - Alias ARN: arn:aws:kms:us-east-2:111122223333:alias/ExampleAlias
+	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey . To
+	// get the alias name and alias ARN, use ListAliases .
 	//
 	// This member is required.
 	KeyId *string
 
 	// A list of grant tokens. Use a grant token when your permission to call this
 	// operation comes from a new grant that has not yet achieved eventual consistency.
-	// For more information, see Grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
-	// and Using a grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
+	// For more information, see Grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
+	// and Using a grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
 	// in the Key Management Service Developer Guide.
 	GrantTokens []string
 
@@ -145,6 +119,9 @@ func (c *Client) addOperationDescribeKeyMiddlewares(stack *middleware.Stack, opt
 	}
 	err = stack.Deserialize.Add(&awsAwsjson11_deserializeOpDescribeKey{}, middleware.After)
 	if err != nil {
+		return err
+	}
+	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
@@ -174,7 +151,7 @@ func (c *Client) addOperationDescribeKeyMiddlewares(stack *middleware.Stack, opt
 	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
 		return err
 	}
-	if err = addClientUserAgent(stack); err != nil {
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -183,10 +160,16 @@ func (c *Client) addOperationDescribeKeyMiddlewares(stack *middleware.Stack, opt
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addDescribeKeyResolveEndpointMiddleware(stack, options); err != nil {
+		return err
+	}
 	if err = addOpDescribeKeyValidationMiddleware(stack); err != nil {
 		return err
 	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opDescribeKey(options.Region), middleware.Before); err != nil {
+		return err
+	}
+	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -196,6 +179,9 @@ func (c *Client) addOperationDescribeKeyMiddlewares(stack *middleware.Stack, opt
 		return err
 	}
 	if err = addRequestResponseLogging(stack, options); err != nil {
+		return err
+	}
+	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -208,4 +194,127 @@ func newServiceMetadataMiddleware_opDescribeKey(region string) *awsmiddleware.Re
 		SigningName:   "kms",
 		OperationName: "DescribeKey",
 	}
+}
+
+type opDescribeKeyResolveEndpointMiddleware struct {
+	EndpointResolver EndpointResolverV2
+	BuiltInResolver  builtInParameterResolver
+}
+
+func (*opDescribeKeyResolveEndpointMiddleware) ID() string {
+	return "ResolveEndpointV2"
+}
+
+func (m *opDescribeKeyResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
+	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
+) {
+	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
+		return next.HandleSerialize(ctx, in)
+	}
+
+	req, ok := in.Request.(*smithyhttp.Request)
+	if !ok {
+		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
+	}
+
+	if m.EndpointResolver == nil {
+		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
+	}
+
+	params := EndpointParameters{}
+
+	m.BuiltInResolver.ResolveBuiltIns(&params)
+
+	var resolvedEndpoint smithyendpoints.Endpoint
+	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
+	if err != nil {
+		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
+	}
+
+	req.URL = &resolvedEndpoint.URI
+
+	for k := range resolvedEndpoint.Headers {
+		req.Header.Set(
+			k,
+			resolvedEndpoint.Headers.Get(k),
+		)
+	}
+
+	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
+	if err != nil {
+		var nfe *internalauth.NoAuthenticationSchemesFoundError
+		if errors.As(err, &nfe) {
+			// if no auth scheme is found, default to sigv4
+			signingName := "kms"
+			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+
+		}
+		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
+		if errors.As(err, &ue) {
+			return out, metadata, fmt.Errorf(
+				"This operation requests signer version(s) %v but the client only supports %v",
+				ue.UnsupportedSchemes,
+				internalauth.SupportedSchemes,
+			)
+		}
+	}
+
+	for _, authScheme := range authSchemes {
+		switch authScheme.(type) {
+		case *internalauth.AuthenticationSchemeV4:
+			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
+			var signingName, signingRegion string
+			if v4Scheme.SigningName == nil {
+				signingName = "kms"
+			} else {
+				signingName = *v4Scheme.SigningName
+			}
+			if v4Scheme.SigningRegion == nil {
+				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
+			} else {
+				signingRegion = *v4Scheme.SigningRegion
+			}
+			if v4Scheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+			break
+		case *internalauth.AuthenticationSchemeV4A:
+			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
+			if v4aScheme.SigningName == nil {
+				v4aScheme.SigningName = aws.String("kms")
+			}
+			if v4aScheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
+			break
+		case *internalauth.AuthenticationSchemeNone:
+			break
+		}
+	}
+
+	return next.HandleSerialize(ctx, in)
+}
+
+func addDescribeKeyResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
+	return stack.Serialize.Insert(&opDescribeKeyResolveEndpointMiddleware{
+		EndpointResolver: options.EndpointResolverV2,
+		BuiltInResolver: &builtInResolver{
+			Region:       options.Region,
+			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
+			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
+			Endpoint:     options.BaseEndpoint,
+		},
+	}, "ResolveEndpoint", middleware.After)
 }

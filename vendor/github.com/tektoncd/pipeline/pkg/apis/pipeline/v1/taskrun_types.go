@@ -37,7 +37,7 @@ type TaskRunSpec struct {
 	Debug *TaskRunDebug `json:"debug,omitempty"`
 	// +optional
 	// +listType=atomic
-	Params []Param `json:"params,omitempty"`
+	Params Params `json:"params,omitempty"`
 	// +optional
 	ServiceAccountName string `json:"serviceAccountName"`
 	// no more than one of the TaskRef and TaskSpec may be specified.
@@ -55,7 +55,6 @@ type TaskRunSpec struct {
 	// +optional
 	Retries int `json:"retries,omitempty"`
 	// Time after which one retry attempt times out. Defaults to 1 hour.
-	// Specified build timeout should be less than 24h.
 	// Refer Go's ParseDuration documentation for expected format: https://golang.org/pkg/time/#ParseDuration
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
@@ -114,7 +113,7 @@ type TaskRunDebug struct {
 type TaskRunInputs struct {
 	// +optional
 	// +listType=atomic
-	Params []Param `json:"params,omitempty"`
+	Params Params `json:"params,omitempty"`
 }
 
 var taskRunCondSet = apis.NewBatchConditionSet()
@@ -239,6 +238,9 @@ type TaskRunStatusFields struct {
 	// Provenance contains some key authenticated metadata about how a software artifact was built (what sources, what inputs/outputs, etc.).
 	// +optional
 	Provenance *Provenance `json:"provenance,omitempty"`
+
+	// SpanContext contains tracing span context fields
+	SpanContext map[string]string `json:"spanContext,omitempty"`
 }
 
 // TaskRunStepSpec is used to override the values of a Step in the corresponding Task.
@@ -378,9 +380,14 @@ func (tr *TaskRun) HasStarted() bool {
 	return tr.Status.StartTime != nil && !tr.Status.StartTime.IsZero()
 }
 
-// IsSuccessful returns true if the TaskRun's status indicates that it is done.
+// IsSuccessful returns true if the TaskRun's status indicates that it has succeeded.
 func (tr *TaskRun) IsSuccessful() bool {
 	return tr != nil && tr.Status.GetCondition(apis.ConditionSucceeded).IsTrue()
+}
+
+// IsFailure returns true if the TaskRun's status indicates that it has failed.
+func (tr *TaskRun) IsFailure() bool {
+	return tr != nil && tr.Status.GetCondition(apis.ConditionSucceeded).IsFalse()
 }
 
 // IsCancelled returns true if the TaskRun's spec status is set to Cancelled state
@@ -412,7 +419,7 @@ func (tr *TaskRun) GetTimeout(ctx context.Context) time.Duration {
 	// Use the platform default is no timeout is set
 	if tr.Spec.Timeout == nil {
 		defaultTimeout := time.Duration(config.FromContextOrDefaults(ctx).Defaults.DefaultTimeoutMinutes)
-		return defaultTimeout * time.Minute
+		return defaultTimeout * time.Minute //nolint:durationcheck
 	}
 	return tr.Spec.Timeout.Duration
 }

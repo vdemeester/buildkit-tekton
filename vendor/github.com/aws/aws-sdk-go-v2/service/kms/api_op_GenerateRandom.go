@@ -4,8 +4,14 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -14,19 +20,23 @@ import (
 // NumberOfBytes parameter to specify the length of the random byte string. There
 // is no default value for string length. By default, the random byte string is
 // generated in KMS. To generate the byte string in the CloudHSM cluster associated
-// with an CloudHSM key store, use the CustomKeyStoreId parameter. Applications in
-// Amazon Web Services Nitro Enclaves can call this operation by using the Amazon
-// Web Services Nitro Enclaves Development Kit
-// (https://github.com/aws/aws-nitro-enclaves-sdk-c). For information about the
-// supporting parameters, see How Amazon Web Services Nitro Enclaves use KMS
-// (https://docs.aws.amazon.com/kms/latest/developerguide/services-nitro-enclaves.html)
+// with an CloudHSM key store, use the CustomKeyStoreId parameter. GenerateRandom
+// also supports Amazon Web Services Nitro Enclaves (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nitro-enclave.html)
+// , which provide an isolated compute environment in Amazon EC2. To call
+// GenerateRandom for a Nitro enclave, use the Amazon Web Services Nitro Enclaves
+// SDK (https://docs.aws.amazon.com/enclaves/latest/user/developing-applications.html#sdk)
+// or any Amazon Web Services SDK. Use the Recipient parameter to provide the
+// attestation document for the enclave. Instead of plaintext bytes, the response
+// includes the plaintext bytes encrypted under the public key from the attestation
+// document ( CiphertextForRecipient ).For information about the interaction
+// between KMS and Amazon Web Services Nitro Enclaves, see How Amazon Web Services
+// Nitro Enclaves uses KMS (https://docs.aws.amazon.com/kms/latest/developerguide/services-nitro-enclaves.html)
 // in the Key Management Service Developer Guide. For more information about
 // entropy and random number generation, see Key Management Service Cryptographic
-// Details (https://docs.aws.amazon.com/kms/latest/cryptographic-details/).
+// Details (https://docs.aws.amazon.com/kms/latest/cryptographic-details/) .
 // Cross-account use: Not applicable. GenerateRandom does not use any
 // account-specific resources, such as KMS keys. Required permissions:
-// kms:GenerateRandom
-// (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
+// kms:GenerateRandom (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
 // (IAM policy)
 func (c *Client) GenerateRandom(ctx context.Context, params *GenerateRandomInput, optFns ...func(*Options)) (*GenerateRandomOutput, error) {
 	if params == nil {
@@ -45,23 +55,51 @@ func (c *Client) GenerateRandom(ctx context.Context, params *GenerateRandomInput
 
 type GenerateRandomInput struct {
 
-	// Generates the random byte string in the CloudHSM cluster that is associated with
-	// the specified CloudHSM key store. To find the ID of a custom key store, use the
-	// DescribeCustomKeyStores operation. External key store IDs are not valid for this
-	// parameter. If you specify the ID of an external key store, GenerateRandom throws
-	// an UnsupportedOperationException.
+	// Generates the random byte string in the CloudHSM cluster that is associated
+	// with the specified CloudHSM key store. To find the ID of a custom key store, use
+	// the DescribeCustomKeyStores operation. External key store IDs are not valid for
+	// this parameter. If you specify the ID of an external key store, GenerateRandom
+	// throws an UnsupportedOperationException .
 	CustomKeyStoreId *string
 
 	// The length of the random byte string. This parameter is required.
 	NumberOfBytes *int32
+
+	// A signed attestation document (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nitro-enclave-how.html#term-attestdoc)
+	// from an Amazon Web Services Nitro enclave and the encryption algorithm to use
+	// with the enclave's public key. The only valid encryption algorithm is
+	// RSAES_OAEP_SHA_256 . This parameter only supports attestation documents for
+	// Amazon Web Services Nitro Enclaves. To include this parameter, use the Amazon
+	// Web Services Nitro Enclaves SDK (https://docs.aws.amazon.com/enclaves/latest/user/developing-applications.html#sdk)
+	// or any Amazon Web Services SDK. When you use this parameter, instead of
+	// returning plaintext bytes, KMS encrypts the plaintext bytes under the public key
+	// in the attestation document, and returns the resulting ciphertext in the
+	// CiphertextForRecipient field in the response. This ciphertext can be decrypted
+	// only with the private key in the enclave. The Plaintext field in the response
+	// is null or empty. For information about the interaction between KMS and Amazon
+	// Web Services Nitro Enclaves, see How Amazon Web Services Nitro Enclaves uses KMS (https://docs.aws.amazon.com/kms/latest/developerguide/services-nitro-enclaves.html)
+	// in the Key Management Service Developer Guide.
+	Recipient *types.RecipientInfo
 
 	noSmithyDocumentSerde
 }
 
 type GenerateRandomOutput struct {
 
+	// The plaintext random bytes encrypted with the public key from the Nitro
+	// enclave. This ciphertext can be decrypted only by using a private key in the
+	// Nitro enclave. This field is included in the response only when the Recipient
+	// parameter in the request includes a valid attestation document from an Amazon
+	// Web Services Nitro enclave. For information about the interaction between KMS
+	// and Amazon Web Services Nitro Enclaves, see How Amazon Web Services Nitro
+	// Enclaves uses KMS (https://docs.aws.amazon.com/kms/latest/developerguide/services-nitro-enclaves.html)
+	// in the Key Management Service Developer Guide.
+	CiphertextForRecipient []byte
+
 	// The random byte string. When you use the HTTP API or the Amazon Web Services
-	// CLI, the value is Base64-encoded. Otherwise, it is not Base64-encoded.
+	// CLI, the value is Base64-encoded. Otherwise, it is not Base64-encoded. If the
+	// response includes the CiphertextForRecipient field, the Plaintext field is null
+	// or empty.
 	Plaintext []byte
 
 	// Metadata pertaining to the operation's result.
@@ -77,6 +115,9 @@ func (c *Client) addOperationGenerateRandomMiddlewares(stack *middleware.Stack, 
 	}
 	err = stack.Deserialize.Add(&awsAwsjson11_deserializeOpGenerateRandom{}, middleware.After)
 	if err != nil {
+		return err
+	}
+	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
@@ -106,7 +147,7 @@ func (c *Client) addOperationGenerateRandomMiddlewares(stack *middleware.Stack, 
 	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
 		return err
 	}
-	if err = addClientUserAgent(stack); err != nil {
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -115,7 +156,13 @@ func (c *Client) addOperationGenerateRandomMiddlewares(stack *middleware.Stack, 
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addGenerateRandomResolveEndpointMiddleware(stack, options); err != nil {
+		return err
+	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opGenerateRandom(options.Region), middleware.Before); err != nil {
+		return err
+	}
+	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -125,6 +172,9 @@ func (c *Client) addOperationGenerateRandomMiddlewares(stack *middleware.Stack, 
 		return err
 	}
 	if err = addRequestResponseLogging(stack, options); err != nil {
+		return err
+	}
+	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -137,4 +187,127 @@ func newServiceMetadataMiddleware_opGenerateRandom(region string) *awsmiddleware
 		SigningName:   "kms",
 		OperationName: "GenerateRandom",
 	}
+}
+
+type opGenerateRandomResolveEndpointMiddleware struct {
+	EndpointResolver EndpointResolverV2
+	BuiltInResolver  builtInParameterResolver
+}
+
+func (*opGenerateRandomResolveEndpointMiddleware) ID() string {
+	return "ResolveEndpointV2"
+}
+
+func (m *opGenerateRandomResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
+	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
+) {
+	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
+		return next.HandleSerialize(ctx, in)
+	}
+
+	req, ok := in.Request.(*smithyhttp.Request)
+	if !ok {
+		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
+	}
+
+	if m.EndpointResolver == nil {
+		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
+	}
+
+	params := EndpointParameters{}
+
+	m.BuiltInResolver.ResolveBuiltIns(&params)
+
+	var resolvedEndpoint smithyendpoints.Endpoint
+	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
+	if err != nil {
+		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
+	}
+
+	req.URL = &resolvedEndpoint.URI
+
+	for k := range resolvedEndpoint.Headers {
+		req.Header.Set(
+			k,
+			resolvedEndpoint.Headers.Get(k),
+		)
+	}
+
+	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
+	if err != nil {
+		var nfe *internalauth.NoAuthenticationSchemesFoundError
+		if errors.As(err, &nfe) {
+			// if no auth scheme is found, default to sigv4
+			signingName := "kms"
+			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+
+		}
+		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
+		if errors.As(err, &ue) {
+			return out, metadata, fmt.Errorf(
+				"This operation requests signer version(s) %v but the client only supports %v",
+				ue.UnsupportedSchemes,
+				internalauth.SupportedSchemes,
+			)
+		}
+	}
+
+	for _, authScheme := range authSchemes {
+		switch authScheme.(type) {
+		case *internalauth.AuthenticationSchemeV4:
+			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
+			var signingName, signingRegion string
+			if v4Scheme.SigningName == nil {
+				signingName = "kms"
+			} else {
+				signingName = *v4Scheme.SigningName
+			}
+			if v4Scheme.SigningRegion == nil {
+				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
+			} else {
+				signingRegion = *v4Scheme.SigningRegion
+			}
+			if v4Scheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+			break
+		case *internalauth.AuthenticationSchemeV4A:
+			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
+			if v4aScheme.SigningName == nil {
+				v4aScheme.SigningName = aws.String("kms")
+			}
+			if v4aScheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
+			break
+		case *internalauth.AuthenticationSchemeNone:
+			break
+		}
+	}
+
+	return next.HandleSerialize(ctx, in)
+}
+
+func addGenerateRandomResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
+	return stack.Serialize.Insert(&opGenerateRandomResolveEndpointMiddleware{
+		EndpointResolver: options.EndpointResolverV2,
+		BuiltInResolver: &builtInResolver{
+			Region:       options.Region,
+			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
+			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
+			Endpoint:     options.BaseEndpoint,
+		},
+	}, "ResolveEndpoint", middleware.After)
 }

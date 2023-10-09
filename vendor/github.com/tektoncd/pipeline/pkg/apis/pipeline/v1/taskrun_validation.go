@@ -62,9 +62,12 @@ func (ts *TaskRunSpec) Validate(ctx context.Context) (errs *apis.FieldError) {
 	}
 	// Validate TaskSpec if it's present.
 	if ts.TaskSpec != nil {
-		// skip validation of parameter and workspaces variables since we validate them via taskrunspec below.
-		ctx = config.SkipValidationDueToPropagatedParametersAndWorkspaces(ctx, true)
 		errs = errs.Also(ts.TaskSpec.Validate(ctx).ViaField("taskSpec"))
+		// Validate beta fields separately for inline Task definitions.
+		// This prevents validation from failing in the reconciler when a Task is converted to a different API version.
+		// See https://github.com/tektoncd/pipeline/issues/6616 for more information.
+		// TODO(#6592): Decouple API versioning from feature versioning
+		errs = errs.Also(ts.TaskSpec.ValidateBetaFields(ctx).ViaField("taskSpec"))
 	}
 
 	errs = errs.Also(ValidateParameters(ctx, ts.Params).ViaField("params"))
@@ -141,7 +144,8 @@ func (ts *TaskRunSpec) validateInlineParameters(ctx context.Context) (errs *apis
 	}
 	if ts.TaskSpec != nil && ts.TaskSpec.Steps != nil {
 		errs = errs.Also(ValidateParameterTypes(ctx, paramSpec))
-		errs = errs.Also(ValidateParameterVariables(config.SkipValidationDueToPropagatedParametersAndWorkspaces(ctx, false), ts.TaskSpec.Steps, paramSpec))
+		errs = errs.Also(ValidateParameterVariables(ctx, ts.TaskSpec.Steps, paramSpec))
+		errs = errs.Also(ValidateUsageOfDeclaredParameters(ctx, ts.TaskSpec.Steps, paramSpec))
 	}
 	return errs
 }
@@ -238,13 +242,13 @@ func ValidateWorkspaceBindings(ctx context.Context, wb []WorkspaceBinding) (errs
 }
 
 // ValidateParameters makes sure the params for the Task are valid.
-func ValidateParameters(ctx context.Context, params []Param) (errs *apis.FieldError) {
+func ValidateParameters(ctx context.Context, params Params) (errs *apis.FieldError) {
 	var names []string
 	for _, p := range params {
 		if p.Value.Type == ParamTypeObject {
-			// Object type parameter is an alpha feature and will fail validation if it's used in a taskrun spec
-			// when the enable-api-fields feature gate is not "alpha".
-			errs = errs.Also(version.ValidateEnabledAPIFields(ctx, "object type parameter", config.AlphaAPIFields))
+			// Object type parameter is a beta feature and will fail validation if it's used in a taskrun spec
+			// when the enable-api-fields feature gate is not "alpha" or "beta".
+			errs = errs.Also(version.ValidateEnabledAPIFields(ctx, "object type parameter", config.BetaAPIFields))
 		}
 		names = append(names, p.Name)
 	}

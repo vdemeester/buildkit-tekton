@@ -32,15 +32,21 @@ import (
 
 var azureSupportedHashFuncs = []crypto.Hash{
 	crypto.SHA256,
+	crypto.SHA384,
+	crypto.SHA512,
 }
 
 //nolint:revive
 const (
 	AlgorithmES256 = "ES256"
+	AlgorithmES384 = "ES384"
+	AlgorithmES512 = "ES512"
 )
 
 var azureSupportedAlgorithms = []string{
 	AlgorithmES256,
+	AlgorithmES384,
+	AlgorithmES512,
 }
 
 // SignerVerifier creates and verifies digital signatures over a message using Azure KMS service
@@ -53,22 +59,20 @@ type SignerVerifier struct {
 // LoadSignerVerifier generates signatures using the specified key in Azure Key Vault and hash algorithm.
 //
 // It also can verify signatures locally using the public key. hashFunc must not be crypto.Hash(0).
-func LoadSignerVerifier(defaultCtx context.Context, referenceStr string, hashFunc crypto.Hash) (*SignerVerifier, error) {
+func LoadSignerVerifier(defaultCtx context.Context, referenceStr string) (*SignerVerifier, error) {
 	a := &SignerVerifier{
 		defaultCtx: defaultCtx,
 	}
 
 	var err error
-	a.client, err = newAzureKMS(defaultCtx, referenceStr)
+	a.client, err = newAzureKMS(referenceStr)
 	if err != nil {
 		return nil, err
 	}
 
-	switch hashFunc {
-	case 0, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
-		a.hashFunc = hashFunc
-	default:
-		return nil, errors.New("hash function not supported by Azure Key Vault")
+	a.hashFunc, _, err = a.client.getKeyVaultHashFunc(defaultCtx)
+	if err != nil {
+		return nil, err
 	}
 
 	return a, nil
@@ -90,14 +94,17 @@ func LoadSignerVerifier(defaultCtx context.Context, referenceStr string, hashFun
 func (a *SignerVerifier) SignMessage(message io.Reader, opts ...signature.SignOption) ([]byte, error) {
 	ctx := context.Background()
 	var digest []byte
-	var signerOpts crypto.SignerOpts = a.hashFunc
 
 	for _, opt := range opts {
 		opt.ApplyDigest(&digest)
-		opt.ApplyCryptoSignerOpts(&signerOpts)
 	}
 
-	digest, _, err := signature.ComputeDigestForSigning(message, signerOpts.HashFunc(), azureSupportedHashFuncs, opts...)
+	hashFunc, _, err := a.client.getKeyVaultHashFunc(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	digest, _, err = signature.ComputeDigestForSigning(message, hashFunc, azureSupportedHashFuncs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +119,7 @@ func (a *SignerVerifier) SignMessage(message io.Reader, opts ...signature.SignOp
 	r.SetBytes(rawSig[0 : l/2])
 	s.SetBytes(rawSig[l/2:])
 
-	// Convert the concantenated r||s byte string to an ASN.1 sequence
+	// Convert the concatenated r||s byte string to an ASN.1 sequence
 	// This logic is borrowed from https://cs.opensource.google/go/go/+/refs/tags/go1.17.3:src/crypto/ecdsa/ecdsa.go;l=121
 	var b cryptobyte.Builder
 	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
@@ -152,7 +159,7 @@ func (a *SignerVerifier) VerifySignature(sig, message io.Reader, opts ...signatu
 		return fmt.Errorf("reading signature: %w", err)
 	}
 
-	// Convert the ANS.1 Sequence to a concantenated r||s byte string
+	// Convert the ASN.1 Sequence to a concatenated r||s byte string
 	// This logic is borrowed from https://cs.opensource.google/go/go/+/refs/tags/go1.17.3:src/crypto/ecdsa/ecdsa.go;l=339
 	var (
 		r, s  = &big.Int{}, &big.Int{}
@@ -176,11 +183,11 @@ func (a *SignerVerifier) VerifySignature(sig, message io.Reader, opts ...signatu
 // PublicKey returns the public key that can be used to verify signatures created by
 // this signer. All options provided in arguments to this method are ignored.
 func (a *SignerVerifier) PublicKey(_ ...signature.PublicKeyOption) (crypto.PublicKey, error) {
-	return a.client.public()
+	return a.client.public(context.Background())
 }
 
 // CreateKey attempts to create a new key in Vault with the specified algorithm.
-func (a *SignerVerifier) CreateKey(ctx context.Context, algorithm string) (crypto.PublicKey, error) {
+func (a *SignerVerifier) CreateKey(ctx context.Context, _ string) (crypto.PublicKey, error) {
 	return a.client.createKey(ctx)
 }
 

@@ -4,37 +4,39 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Generates a hash-based message authentication code (HMAC) for a message using an
-// HMAC KMS key and a MAC algorithm that the key supports. HMAC KMS keys and the
-// HMAC algorithms that KMS uses conform to industry standards defined in RFC 2104
-// (https://datatracker.ietf.org/doc/html/rfc2104). You can use value that
-// GenerateMac returns in the VerifyMac operation to demonstrate that the original
-// message has not changed. Also, because a secret key is used to create the hash,
-// you can verify that the party that generated the hash has the required secret
-// key. You can also use the raw result to implement HMAC-based algorithms such as
-// key derivation functions. This operation is part of KMS support for HMAC KMS
-// keys. For details, see HMAC keys in KMS
-// (https://docs.aws.amazon.com/kms/latest/developerguide/hmac.html) in the Key
-// Management Service Developer Guide . Best practices recommend that you limit the
-// time during which any signing mechanism, including an HMAC, is effective. This
-// deters an attack where the actor uses a signed message to establish validity
-// repeatedly or long after the message is superseded. HMAC tags do not include a
-// timestamp, but you can include a timestamp in the token or message to help you
-// detect when its time to refresh the HMAC. The KMS key that you use for this
-// operation must be in a compatible key state. For details, see Key states of KMS
-// keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html) in
-// the Key Management Service Developer Guide. Cross-account use: Yes. To perform
-// this operation with a KMS key in a different Amazon Web Services account,
-// specify the key ARN or alias ARN in the value of the KeyId parameter. Required
-// permissions: kms:GenerateMac
-// (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
+// Generates a hash-based message authentication code (HMAC) for a message using
+// an HMAC KMS key and a MAC algorithm that the key supports. HMAC KMS keys and the
+// HMAC algorithms that KMS uses conform to industry standards defined in RFC 2104 (https://datatracker.ietf.org/doc/html/rfc2104)
+// . You can use value that GenerateMac returns in the VerifyMac operation to
+// demonstrate that the original message has not changed. Also, because a secret
+// key is used to create the hash, you can verify that the party that generated the
+// hash has the required secret key. You can also use the raw result to implement
+// HMAC-based algorithms such as key derivation functions. This operation is part
+// of KMS support for HMAC KMS keys. For details, see HMAC keys in KMS (https://docs.aws.amazon.com/kms/latest/developerguide/hmac.html)
+// in the Key Management Service Developer Guide . Best practices recommend that
+// you limit the time during which any signing mechanism, including an HMAC, is
+// effective. This deters an attack where the actor uses a signed message to
+// establish validity repeatedly or long after the message is superseded. HMAC tags
+// do not include a timestamp, but you can include a timestamp in the token or
+// message to help you detect when its time to refresh the HMAC. The KMS key that
+// you use for this operation must be in a compatible key state. For details, see
+// Key states of KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html)
+// in the Key Management Service Developer Guide. Cross-account use: Yes. To
+// perform this operation with a KMS key in a different Amazon Web Services
+// account, specify the key ARN or alias ARN in the value of the KeyId parameter.
+// Required permissions: kms:GenerateMac (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
 // (key policy) Related operations: VerifyMac
 func (c *Client) GenerateMac(ctx context.Context, params *GenerateMacInput, optFns ...func(*Options)) (*GenerateMacOutput, error) {
 	if params == nil {
@@ -54,9 +56,9 @@ func (c *Client) GenerateMac(ctx context.Context, params *GenerateMacInput, optF
 type GenerateMacInput struct {
 
 	// The HMAC KMS key to use in the operation. The MAC algorithm computes the HMAC
-	// for the message and the key as described in RFC 2104
-	// (https://datatracker.ietf.org/doc/html/rfc2104). To identify an HMAC KMS key,
-	// use the DescribeKey operation and see the KeySpec field in the response.
+	// for the message and the key as described in RFC 2104 (https://datatracker.ietf.org/doc/html/rfc2104)
+	// . To identify an HMAC KMS key, use the DescribeKey operation and see the KeySpec
+	// field in the response.
 	//
 	// This member is required.
 	KeyId *string
@@ -77,12 +79,15 @@ type GenerateMacInput struct {
 	// This member is required.
 	Message []byte
 
+	// Checks if your request will succeed. DryRun is an optional parameter. To learn
+	// more about how to use this parameter, see Testing your KMS API calls (https://docs.aws.amazon.com/kms/latest/developerguide/programming-dryrun.html)
+	// in the Key Management Service Developer Guide.
+	DryRun *bool
+
 	// A list of grant tokens. Use a grant token when your permission to call this
 	// operation comes from a new grant that has not yet achieved eventual consistency.
-	// For more information, see Grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
-	// and Using a grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
+	// For more information, see Grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
+	// and Using a grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
 	// in the Key Management Service Developer Guide.
 	GrantTokens []string
 
@@ -96,7 +101,7 @@ type GenerateMacOutput struct {
 
 	// The hash-based message authentication code (HMAC) that was generated for the
 	// specified message, HMAC KMS key, and MAC algorithm. This is the standard, raw
-	// HMAC defined in RFC 2104 (https://datatracker.ietf.org/doc/html/rfc2104).
+	// HMAC defined in RFC 2104 (https://datatracker.ietf.org/doc/html/rfc2104) .
 	Mac []byte
 
 	// The MAC algorithm that was used to generate the HMAC.
@@ -115,6 +120,9 @@ func (c *Client) addOperationGenerateMacMiddlewares(stack *middleware.Stack, opt
 	}
 	err = stack.Deserialize.Add(&awsAwsjson11_deserializeOpGenerateMac{}, middleware.After)
 	if err != nil {
+		return err
+	}
+	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
@@ -144,7 +152,7 @@ func (c *Client) addOperationGenerateMacMiddlewares(stack *middleware.Stack, opt
 	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
 		return err
 	}
-	if err = addClientUserAgent(stack); err != nil {
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -153,10 +161,16 @@ func (c *Client) addOperationGenerateMacMiddlewares(stack *middleware.Stack, opt
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addGenerateMacResolveEndpointMiddleware(stack, options); err != nil {
+		return err
+	}
 	if err = addOpGenerateMacValidationMiddleware(stack); err != nil {
 		return err
 	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opGenerateMac(options.Region), middleware.Before); err != nil {
+		return err
+	}
+	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -166,6 +180,9 @@ func (c *Client) addOperationGenerateMacMiddlewares(stack *middleware.Stack, opt
 		return err
 	}
 	if err = addRequestResponseLogging(stack, options); err != nil {
+		return err
+	}
+	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -178,4 +195,127 @@ func newServiceMetadataMiddleware_opGenerateMac(region string) *awsmiddleware.Re
 		SigningName:   "kms",
 		OperationName: "GenerateMac",
 	}
+}
+
+type opGenerateMacResolveEndpointMiddleware struct {
+	EndpointResolver EndpointResolverV2
+	BuiltInResolver  builtInParameterResolver
+}
+
+func (*opGenerateMacResolveEndpointMiddleware) ID() string {
+	return "ResolveEndpointV2"
+}
+
+func (m *opGenerateMacResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
+	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
+) {
+	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
+		return next.HandleSerialize(ctx, in)
+	}
+
+	req, ok := in.Request.(*smithyhttp.Request)
+	if !ok {
+		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
+	}
+
+	if m.EndpointResolver == nil {
+		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
+	}
+
+	params := EndpointParameters{}
+
+	m.BuiltInResolver.ResolveBuiltIns(&params)
+
+	var resolvedEndpoint smithyendpoints.Endpoint
+	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
+	if err != nil {
+		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
+	}
+
+	req.URL = &resolvedEndpoint.URI
+
+	for k := range resolvedEndpoint.Headers {
+		req.Header.Set(
+			k,
+			resolvedEndpoint.Headers.Get(k),
+		)
+	}
+
+	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
+	if err != nil {
+		var nfe *internalauth.NoAuthenticationSchemesFoundError
+		if errors.As(err, &nfe) {
+			// if no auth scheme is found, default to sigv4
+			signingName := "kms"
+			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+
+		}
+		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
+		if errors.As(err, &ue) {
+			return out, metadata, fmt.Errorf(
+				"This operation requests signer version(s) %v but the client only supports %v",
+				ue.UnsupportedSchemes,
+				internalauth.SupportedSchemes,
+			)
+		}
+	}
+
+	for _, authScheme := range authSchemes {
+		switch authScheme.(type) {
+		case *internalauth.AuthenticationSchemeV4:
+			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
+			var signingName, signingRegion string
+			if v4Scheme.SigningName == nil {
+				signingName = "kms"
+			} else {
+				signingName = *v4Scheme.SigningName
+			}
+			if v4Scheme.SigningRegion == nil {
+				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
+			} else {
+				signingRegion = *v4Scheme.SigningRegion
+			}
+			if v4Scheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+			break
+		case *internalauth.AuthenticationSchemeV4A:
+			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
+			if v4aScheme.SigningName == nil {
+				v4aScheme.SigningName = aws.String("kms")
+			}
+			if v4aScheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
+			break
+		case *internalauth.AuthenticationSchemeNone:
+			break
+		}
+	}
+
+	return next.HandleSerialize(ctx, in)
+}
+
+func addGenerateMacResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
+	return stack.Serialize.Insert(&opGenerateMacResolveEndpointMiddleware{
+		EndpointResolver: options.EndpointResolverV2,
+		BuiltInResolver: &builtInResolver{
+			Region:       options.Region,
+			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
+			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
+			Endpoint:     options.BaseEndpoint,
+		},
+	}, "ResolveEndpoint", middleware.After)
 }

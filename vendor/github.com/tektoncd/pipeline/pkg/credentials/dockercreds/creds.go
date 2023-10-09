@@ -25,9 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-
 	"github.com/tektoncd/pipeline/pkg/credentials"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const annotationPrefix = "tekton.dev/docker-"
@@ -158,6 +157,10 @@ func (*basicDockerBuilder) MatchingAnnotations(secret *corev1.Secret) []string {
 		flags = append(flags, fmt.Sprintf("-docker-config=%s", secret.Name))
 	case corev1.SecretTypeDockercfg:
 		flags = append(flags, fmt.Sprintf("-docker-cfg=%s", secret.Name))
+
+	case corev1.SecretTypeOpaque, corev1.SecretTypeServiceAccountToken, corev1.SecretTypeSSHAuth, corev1.SecretTypeTLS, corev1.SecretTypeBootstrapToken:
+		return flags
+
 	default:
 		return flags
 	}

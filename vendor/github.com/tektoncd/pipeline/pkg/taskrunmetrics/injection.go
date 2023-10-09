@@ -19,8 +19,8 @@ package taskrunmetrics
 import (
 	"context"
 
-	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1beta1/taskrun"
-	listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1beta1"
+	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
+	listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1"
 	"k8s.io/client-go/rest"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
@@ -30,12 +30,6 @@ import (
 func init() {
 	injection.Default.RegisterClient(func(ctx context.Context, _ *rest.Config) context.Context { return WithClient(ctx) })
 	injection.Default.RegisterInformer(WithInformer)
-
-	injection.Dynamic.RegisterDynamicClient(WithClient)
-	injection.Dynamic.RegisterDynamicInformer(func(ctx context.Context) context.Context {
-		ctx, _ = WithInformer(ctx)
-		return ctx
-	})
 }
 
 // RecorderKey is used for associating the Recorder inside the context.Context.

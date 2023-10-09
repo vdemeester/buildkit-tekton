@@ -4,9 +4,14 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -17,8 +22,7 @@ import (
 // remaining optional parameters to change its properties. This operation does not
 // return any property values. To verify the updated property values, use the
 // DescribeCustomKeyStores operation. This operation is part of the custom key
-// stores
-// (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
+// stores (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
 // feature in KMS, which combines the convenience and extensive integration of KMS
 // with the isolation and control of a key store that you own and manage. When
 // updating the properties of an external key store, verify that the updated
@@ -36,47 +40,40 @@ import (
 // UpdateCustomKeyStore operation. However, you can use the file to help you
 // determine the correct values for the UpdateCustomKeyStore parameters. For an
 // CloudHSM key store, you can use this operation to change the custom key store
-// friendly name (NewCustomKeyStoreName), to tell KMS about a change to the kmsuser
-// crypto user password (KeyStorePassword), or to associate the custom key store
-// with a different, but related, CloudHSM cluster (CloudHsmClusterId). To update
-// any property of an CloudHSM key store, the ConnectionState of the CloudHSM key
-// store must be DISCONNECTED. For an external key store, you can use this
-// operation to change the custom key store friendly name (NewCustomKeyStoreName),
-// or to tell KMS about a change to the external key store proxy authentication
-// credentials (XksProxyAuthenticationCredential), connection method
-// (XksProxyConnectivity), external proxy endpoint (XksProxyUriEndpoint) and path
-// (XksProxyUriPath). For external key stores with an XksProxyConnectivity of
-// VPC_ENDPOINT_SERVICE, you can also update the Amazon VPC endpoint service name
-// (XksProxyVpcEndpointServiceName). To update most properties of an external key
-// store, the ConnectionState of the external key store must be DISCONNECTED.
-// However, you can update the CustomKeyStoreName,
-// XksProxyAuthenticationCredential, and XksProxyUriPath of an external key store
+// friendly name ( NewCustomKeyStoreName ), to tell KMS about a change to the
+// kmsuser crypto user password ( KeyStorePassword ), or to associate the custom
+// key store with a different, but related, CloudHSM cluster ( CloudHsmClusterId ).
+// To update any property of an CloudHSM key store, the ConnectionState of the
+// CloudHSM key store must be DISCONNECTED . For an external key store, you can use
+// this operation to change the custom key store friendly name (
+// NewCustomKeyStoreName ), or to tell KMS about a change to the external key store
+// proxy authentication credentials ( XksProxyAuthenticationCredential ),
+// connection method ( XksProxyConnectivity ), external proxy endpoint (
+// XksProxyUriEndpoint ) and path ( XksProxyUriPath ). For external key stores with
+// an XksProxyConnectivity of VPC_ENDPOINT_SERVICE , you can also update the Amazon
+// VPC endpoint service name ( XksProxyVpcEndpointServiceName ). To update most
+// properties of an external key store, the ConnectionState of the external key
+// store must be DISCONNECTED . However, you can update the CustomKeyStoreName ,
+// XksProxyAuthenticationCredential , and XksProxyUriPath of an external key store
 // when it is in the CONNECTED or DISCONNECTED state. If your update requires a
-// DISCONNECTED state, before using UpdateCustomKeyStore, use the
+// DISCONNECTED state, before using UpdateCustomKeyStore , use the
 // DisconnectCustomKeyStore operation to disconnect the custom key store. After the
 // UpdateCustomKeyStore operation completes, use the ConnectCustomKeyStore to
 // reconnect the custom key store. To find the ConnectionState of the custom key
-// store, use the DescribeCustomKeyStores operation. Before updating the custom key
-// store, verify that the new values allow KMS to connect the custom key store to
-// its backing key store. For example, before you change the XksProxyUriPath value,
-// verify that the external key store proxy is reachable at the new path. If the
-// operation succeeds, it returns a JSON object with no properties. Cross-account
-// use: No. You cannot perform this operation on a custom key store in a different
-// Amazon Web Services account. Required permissions: kms:UpdateCustomKeyStore
-// (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
+// store, use the DescribeCustomKeyStores operation. Before updating the custom
+// key store, verify that the new values allow KMS to connect the custom key store
+// to its backing key store. For example, before you change the XksProxyUriPath
+// value, verify that the external key store proxy is reachable at the new path. If
+// the operation succeeds, it returns a JSON object with no properties.
+// Cross-account use: No. You cannot perform this operation on a custom key store
+// in a different Amazon Web Services account. Required permissions:
+// kms:UpdateCustomKeyStore (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
 // (IAM policy) Related operations:
-//
-// * ConnectCustomKeyStore
-//
-// *
-// CreateCustomKeyStore
-//
-// * DeleteCustomKeyStore
-//
-// * DescribeCustomKeyStores
-//
-// *
-// DisconnectCustomKeyStore
+//   - ConnectCustomKeyStore
+//   - CreateCustomKeyStore
+//   - DeleteCustomKeyStore
+//   - DescribeCustomKeyStores
+//   - DisconnectCustomKeyStore
 func (c *Client) UpdateCustomKeyStore(ctx context.Context, params *UpdateCustomKeyStoreInput, optFns ...func(*Options)) (*UpdateCustomKeyStoreOutput, error) {
 	if params == nil {
 		params = &UpdateCustomKeyStoreInput{}
@@ -102,38 +99,38 @@ type UpdateCustomKeyStoreInput struct {
 	CustomKeyStoreId *string
 
 	// Associates the custom key store with a related CloudHSM cluster. This parameter
-	// is valid only for custom key stores with a CustomKeyStoreType of AWS_CLOUDHSM.
+	// is valid only for custom key stores with a CustomKeyStoreType of AWS_CLOUDHSM .
 	// Enter the cluster ID of the cluster that you used to create the custom key store
 	// or a cluster that shares a backup history and has the same cluster certificate
 	// as the original cluster. You cannot use this parameter to associate a custom key
 	// store with an unrelated cluster. In addition, the replacement cluster must
-	// fulfill the requirements
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/create-keystore.html#before-keystore)
+	// fulfill the requirements (https://docs.aws.amazon.com/kms/latest/developerguide/create-keystore.html#before-keystore)
 	// for a cluster associated with a custom key store. To view the cluster
-	// certificate of a cluster, use the DescribeClusters
-	// (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
+	// certificate of a cluster, use the DescribeClusters (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
 	// operation. To change this value, the CloudHSM key store must be disconnected.
 	CloudHsmClusterId *string
 
 	// Enter the current password of the kmsuser crypto user (CU) in the CloudHSM
 	// cluster that is associated with the custom key store. This parameter is valid
-	// only for custom key stores with a CustomKeyStoreType of AWS_CLOUDHSM. This
+	// only for custom key stores with a CustomKeyStoreType of AWS_CLOUDHSM . This
 	// parameter tells KMS the current password of the kmsuser crypto user (CU). It
 	// does not set or change the password of any users in the CloudHSM cluster. To
 	// change this value, the CloudHSM key store must be disconnected.
 	KeyStorePassword *string
 
-	// Changes the friendly name of the custom key store to the value that you specify.
-	// The custom key store name must be unique in the Amazon Web Services account. To
+	// Changes the friendly name of the custom key store to the value that you
+	// specify. The custom key store name must be unique in the Amazon Web Services
+	// account. Do not include confidential or sensitive information in this field.
+	// This field may be displayed in plaintext in CloudTrail logs and other output. To
 	// change this value, an CloudHSM key store must be disconnected. An external key
 	// store can be connected or disconnected.
 	NewCustomKeyStoreName *string
 
-	// Changes the credentials that KMS uses to sign requests to the external key store
-	// proxy (XKS proxy). This parameter is valid only for custom key stores with a
-	// CustomKeyStoreType of EXTERNAL_KEY_STORE. You must specify both the AccessKeyId
-	// and SecretAccessKey value in the authentication credential, even if you are only
-	// updating one value. This parameter doesn't establish or change your
+	// Changes the credentials that KMS uses to sign requests to the external key
+	// store proxy (XKS proxy). This parameter is valid only for custom key stores with
+	// a CustomKeyStoreType of EXTERNAL_KEY_STORE . You must specify both the
+	// AccessKeyId and SecretAccessKey value in the authentication credential, even if
+	// you are only updating one value. This parameter doesn't establish or change your
 	// authentication credentials on the proxy. It just tells KMS the credential that
 	// you established with your external key store proxy. For example, if you rotate
 	// the credential on your external key store proxy, you can use this parameter to
@@ -143,10 +140,10 @@ type UpdateCustomKeyStoreInput struct {
 
 	// Changes the connectivity setting for the external key store. To indicate that
 	// the external key store proxy uses a Amazon VPC endpoint service to communicate
-	// with KMS, specify VPC_ENDPOINT_SERVICE. Otherwise, specify PUBLIC_ENDPOINT. If
-	// you change the XksProxyConnectivity to VPC_ENDPOINT_SERVICE, you must also
+	// with KMS, specify VPC_ENDPOINT_SERVICE . Otherwise, specify PUBLIC_ENDPOINT . If
+	// you change the XksProxyConnectivity to VPC_ENDPOINT_SERVICE , you must also
 	// change the XksProxyUriEndpoint and add an XksProxyVpcEndpointServiceName value.
-	// If you change the XksProxyConnectivity to PUBLIC_ENDPOINT, you must also change
+	// If you change the XksProxyConnectivity to PUBLIC_ENDPOINT , you must also change
 	// the XksProxyUriEndpoint and specify a null or empty string for the
 	// XksProxyVpcEndpointServiceName value. To change this value, the external key
 	// store must be disconnected.
@@ -154,9 +151,9 @@ type UpdateCustomKeyStoreInput struct {
 
 	// Changes the URI endpoint that KMS uses to connect to your external key store
 	// proxy (XKS proxy). This parameter is valid only for custom key stores with a
-	// CustomKeyStoreType of EXTERNAL_KEY_STORE. For external key stores with an
-	// XksProxyConnectivity value of PUBLIC_ENDPOINT, the protocol must be HTTPS. For
-	// external key stores with an XksProxyConnectivity value of VPC_ENDPOINT_SERVICE,
+	// CustomKeyStoreType of EXTERNAL_KEY_STORE . For external key stores with an
+	// XksProxyConnectivity value of PUBLIC_ENDPOINT , the protocol must be HTTPS. For
+	// external key stores with an XksProxyConnectivity value of VPC_ENDPOINT_SERVICE ,
 	// specify https:// followed by the private DNS name associated with the VPC
 	// endpoint service. Each external key store must use a different private DNS name.
 	// The combined XksProxyUriEndpoint and XksProxyUriPath values must be unique in
@@ -167,10 +164,10 @@ type UpdateCustomKeyStoreInput struct {
 	// Changes the base path to the proxy APIs for this external key store. To find
 	// this value, see the documentation for your external key manager and external key
 	// store proxy (XKS proxy). This parameter is valid only for custom key stores with
-	// a CustomKeyStoreType of EXTERNAL_KEY_STORE. The value must start with / and must
-	// end with /kms/xks/v1, where v1 represents the version of the KMS external key
-	// store proxy API. You can include an optional prefix between the required
-	// elements such as /example/kms/xks/v1. The combined XksProxyUriEndpoint and
+	// a CustomKeyStoreType of EXTERNAL_KEY_STORE . The value must start with / and
+	// must end with /kms/xks/v1 , where v1 represents the version of the KMS external
+	// key store proxy API. You can include an optional prefix between the required
+	// elements such as /example/kms/xks/v1 . The combined XksProxyUriEndpoint and
 	// XksProxyUriPath values must be unique in the Amazon Web Services account and
 	// Region. You can change this value when the external key store is connected or
 	// disconnected.
@@ -179,7 +176,7 @@ type UpdateCustomKeyStoreInput struct {
 	// Changes the name that KMS uses to identify the Amazon VPC endpoint service for
 	// your external key store proxy (XKS proxy). This parameter is valid when the
 	// CustomKeyStoreType is EXTERNAL_KEY_STORE and the XksProxyConnectivity is
-	// VPC_ENDPOINT_SERVICE. To change this value, the external key store must be
+	// VPC_ENDPOINT_SERVICE . To change this value, the external key store must be
 	// disconnected.
 	XksProxyVpcEndpointServiceName *string
 
@@ -200,6 +197,9 @@ func (c *Client) addOperationUpdateCustomKeyStoreMiddlewares(stack *middleware.S
 	}
 	err = stack.Deserialize.Add(&awsAwsjson11_deserializeOpUpdateCustomKeyStore{}, middleware.After)
 	if err != nil {
+		return err
+	}
+	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
@@ -229,7 +229,7 @@ func (c *Client) addOperationUpdateCustomKeyStoreMiddlewares(stack *middleware.S
 	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
 		return err
 	}
-	if err = addClientUserAgent(stack); err != nil {
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -238,10 +238,16 @@ func (c *Client) addOperationUpdateCustomKeyStoreMiddlewares(stack *middleware.S
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addUpdateCustomKeyStoreResolveEndpointMiddleware(stack, options); err != nil {
+		return err
+	}
 	if err = addOpUpdateCustomKeyStoreValidationMiddleware(stack); err != nil {
 		return err
 	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opUpdateCustomKeyStore(options.Region), middleware.Before); err != nil {
+		return err
+	}
+	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -251,6 +257,9 @@ func (c *Client) addOperationUpdateCustomKeyStoreMiddlewares(stack *middleware.S
 		return err
 	}
 	if err = addRequestResponseLogging(stack, options); err != nil {
+		return err
+	}
+	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -263,4 +272,127 @@ func newServiceMetadataMiddleware_opUpdateCustomKeyStore(region string) *awsmidd
 		SigningName:   "kms",
 		OperationName: "UpdateCustomKeyStore",
 	}
+}
+
+type opUpdateCustomKeyStoreResolveEndpointMiddleware struct {
+	EndpointResolver EndpointResolverV2
+	BuiltInResolver  builtInParameterResolver
+}
+
+func (*opUpdateCustomKeyStoreResolveEndpointMiddleware) ID() string {
+	return "ResolveEndpointV2"
+}
+
+func (m *opUpdateCustomKeyStoreResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
+	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
+) {
+	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
+		return next.HandleSerialize(ctx, in)
+	}
+
+	req, ok := in.Request.(*smithyhttp.Request)
+	if !ok {
+		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
+	}
+
+	if m.EndpointResolver == nil {
+		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
+	}
+
+	params := EndpointParameters{}
+
+	m.BuiltInResolver.ResolveBuiltIns(&params)
+
+	var resolvedEndpoint smithyendpoints.Endpoint
+	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
+	if err != nil {
+		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
+	}
+
+	req.URL = &resolvedEndpoint.URI
+
+	for k := range resolvedEndpoint.Headers {
+		req.Header.Set(
+			k,
+			resolvedEndpoint.Headers.Get(k),
+		)
+	}
+
+	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
+	if err != nil {
+		var nfe *internalauth.NoAuthenticationSchemesFoundError
+		if errors.As(err, &nfe) {
+			// if no auth scheme is found, default to sigv4
+			signingName := "kms"
+			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+
+		}
+		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
+		if errors.As(err, &ue) {
+			return out, metadata, fmt.Errorf(
+				"This operation requests signer version(s) %v but the client only supports %v",
+				ue.UnsupportedSchemes,
+				internalauth.SupportedSchemes,
+			)
+		}
+	}
+
+	for _, authScheme := range authSchemes {
+		switch authScheme.(type) {
+		case *internalauth.AuthenticationSchemeV4:
+			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
+			var signingName, signingRegion string
+			if v4Scheme.SigningName == nil {
+				signingName = "kms"
+			} else {
+				signingName = *v4Scheme.SigningName
+			}
+			if v4Scheme.SigningRegion == nil {
+				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
+			} else {
+				signingRegion = *v4Scheme.SigningRegion
+			}
+			if v4Scheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+			break
+		case *internalauth.AuthenticationSchemeV4A:
+			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
+			if v4aScheme.SigningName == nil {
+				v4aScheme.SigningName = aws.String("kms")
+			}
+			if v4aScheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
+			break
+		case *internalauth.AuthenticationSchemeNone:
+			break
+		}
+	}
+
+	return next.HandleSerialize(ctx, in)
+}
+
+func addUpdateCustomKeyStoreResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
+	return stack.Serialize.Insert(&opUpdateCustomKeyStoreResolveEndpointMiddleware{
+		EndpointResolver: options.EndpointResolverV2,
+		BuiltInResolver: &builtInResolver{
+			Region:       options.Region,
+			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
+			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
+			Endpoint:     options.BaseEndpoint,
+		},
+	}, "ResolveEndpoint", middleware.After)
 }

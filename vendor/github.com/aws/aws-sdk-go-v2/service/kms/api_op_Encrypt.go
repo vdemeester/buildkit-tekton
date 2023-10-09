@@ -4,26 +4,30 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Encrypts plaintext of up to 4,096 bytes using a KMS key. You can use a symmetric
-// or asymmetric KMS key with a KeyUsage of ENCRYPT_DECRYPT. You can use this
-// operation to encrypt small amounts of arbitrary data, such as a personal
+// Encrypts plaintext of up to 4,096 bytes using a KMS key. You can use a
+// symmetric or asymmetric KMS key with a KeyUsage of ENCRYPT_DECRYPT . You can use
+// this operation to encrypt small amounts of arbitrary data, such as a personal
 // identifier or database password, or other sensitive information. You don't need
 // to use the Encrypt operation to encrypt a data key. The GenerateDataKey and
 // GenerateDataKeyPair operations return a plaintext data key and an encrypted copy
 // of that data key. If you use a symmetric encryption KMS key, you can use an
 // encryption context to add additional security to your encryption operation. If
-// you specify an EncryptionContext when encrypting data, you must specify the same
-// encryption context (a case-sensitive exact match) when decrypting the data.
-// Otherwise, the request to decrypt fails with an InvalidCiphertextException. For
-// more information, see Encryption Context
-// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#encrypt_context)
+// you specify an EncryptionContext when encrypting data, you must specify the
+// same encryption context (a case-sensitive exact match) when decrypting the data.
+// Otherwise, the request to decrypt fails with an InvalidCiphertextException . For
+// more information, see Encryption Context (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#encrypt_context)
 // in the Key Management Service Developer Guide. If you specify an asymmetric KMS
 // key, you must also specify the encryption algorithm. The algorithm must be
 // compatible with the KMS key spec. When you use an asymmetric KMS key to encrypt
@@ -37,52 +41,29 @@ import (
 // asymmetric keys. The standard format for asymmetric key ciphertext does not
 // include configurable fields. The maximum size of the data that you can encrypt
 // varies with the type of KMS key and the encryption algorithm that you choose.
+//   - Symmetric encryption KMS keys
+//   - SYMMETRIC_DEFAULT : 4096 bytes
+//   - RSA_2048
+//   - RSAES_OAEP_SHA_1 : 214 bytes
+//   - RSAES_OAEP_SHA_256 : 190 bytes
+//   - RSA_3072
+//   - RSAES_OAEP_SHA_1 : 342 bytes
+//   - RSAES_OAEP_SHA_256 : 318 bytes
+//   - RSA_4096
+//   - RSAES_OAEP_SHA_1 : 470 bytes
+//   - RSAES_OAEP_SHA_256 : 446 bytes
+//   - SM2PKE : 1024 bytes (China Regions only)
 //
-// *
-// Symmetric encryption KMS keys
-//
-// * SYMMETRIC_DEFAULT: 4096 bytes
-//
-// * RSA_2048
-//
-// *
-// RSAES_OAEP_SHA_1: 214 bytes
-//
-// * RSAES_OAEP_SHA_256: 190 bytes
-//
-// * RSA_3072
-//
-// *
-// RSAES_OAEP_SHA_1: 342 bytes
-//
-// * RSAES_OAEP_SHA_256: 318 bytes
-//
-// * RSA_4096
-//
-// *
-// RSAES_OAEP_SHA_1: 470 bytes
-//
-// * RSAES_OAEP_SHA_256: 446 bytes
-//
-// * SM2PKE: 1024
-// bytes (China Regions only)
-//
-// The KMS key that you use for this operation must be
-// in a compatible key state. For details, see Key states of KMS keys
-// (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html) in the
-// Key Management Service Developer Guide. Cross-account use: Yes. To perform this
-// operation with a KMS key in a different Amazon Web Services account, specify the
-// key ARN or alias ARN in the value of the KeyId parameter. Required permissions:
-// kms:Encrypt
-// (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
+// The KMS key that you use for this operation must be in a compatible key state.
+// For details, see Key states of KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html)
+// in the Key Management Service Developer Guide. Cross-account use: Yes. To
+// perform this operation with a KMS key in a different Amazon Web Services
+// account, specify the key ARN or alias ARN in the value of the KeyId parameter.
+// Required permissions: kms:Encrypt (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
 // (key policy) Related operations:
-//
-// * Decrypt
-//
-// * GenerateDataKey
-//
-// *
-// GenerateDataKeyPair
+//   - Decrypt
+//   - GenerateDataKey
+//   - GenerateDataKeyPair
 func (c *Client) Encrypt(ctx context.Context, params *EncryptInput, optFns ...func(*Options)) (*EncryptOutput, error) {
 	if params == nil {
 		params = &EncryptInput{}
@@ -100,28 +81,19 @@ func (c *Client) Encrypt(ctx context.Context, params *EncryptInput, optFns ...fu
 
 type EncryptInput struct {
 
-	// Identifies the KMS key to use in the encryption operation. The KMS key must have
-	// a KeyUsage of ENCRYPT_DECRYPT. To find the KeyUsage of a KMS key, use the
+	// Identifies the KMS key to use in the encryption operation. The KMS key must
+	// have a KeyUsage of ENCRYPT_DECRYPT . To find the KeyUsage of a KMS key, use the
 	// DescribeKey operation. To specify a KMS key, use its key ID, key ARN, alias
-	// name, or alias ARN. When using an alias name, prefix it with "alias/". To
+	// name, or alias ARN. When using an alias name, prefix it with "alias/" . To
 	// specify a KMS key in a different Amazon Web Services account, you must use the
 	// key ARN or alias ARN. For example:
-	//
-	// * Key ID:
-	// 1234abcd-12ab-34cd-56ef-1234567890ab
-	//
-	// * Key ARN:
-	// arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
-	//
-	// *
-	// Alias name: alias/ExampleAlias
-	//
-	// * Alias ARN:
-	// arn:aws:kms:us-east-2:111122223333:alias/ExampleAlias
-	//
-	// To get the key ID and key
-	// ARN for a KMS key, use ListKeys or DescribeKey. To get the alias name and alias
-	// ARN, use ListAliases.
+	//   - Key ID: 1234abcd-12ab-34cd-56ef-1234567890ab
+	//   - Key ARN:
+	//   arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
+	//   - Alias name: alias/ExampleAlias
+	//   - Alias ARN: arn:aws:kms:us-east-2:111122223333:alias/ExampleAlias
+	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey . To
+	// get the alias name and alias ARN, use ListAliases .
 	//
 	// This member is required.
 	KeyId *string
@@ -131,36 +103,39 @@ type EncryptInput struct {
 	// This member is required.
 	Plaintext []byte
 
+	// Checks if your request will succeed. DryRun is an optional parameter. To learn
+	// more about how to use this parameter, see Testing your KMS API calls (https://docs.aws.amazon.com/kms/latest/developerguide/programming-dryrun.html)
+	// in the Key Management Service Developer Guide.
+	DryRun *bool
+
 	// Specifies the encryption algorithm that KMS will use to encrypt the plaintext
 	// message. The algorithm must be compatible with the KMS key that you specify.
 	// This parameter is required only for asymmetric KMS keys. The default value,
-	// SYMMETRIC_DEFAULT, is the algorithm used for symmetric encryption KMS keys. If
+	// SYMMETRIC_DEFAULT , is the algorithm used for symmetric encryption KMS keys. If
 	// you are using an asymmetric KMS key, we recommend RSAES_OAEP_SHA_256. The SM2PKE
 	// algorithm is only available in China Regions.
 	EncryptionAlgorithm types.EncryptionAlgorithmSpec
 
 	// Specifies the encryption context that will be used to encrypt the data. An
-	// encryption context is valid only for cryptographic operations
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#cryptographic-operations)
+	// encryption context is valid only for cryptographic operations (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#cryptographic-operations)
 	// with a symmetric encryption KMS key. The standard asymmetric encryption
 	// algorithms and HMAC algorithms that KMS uses do not support an encryption
-	// context. An encryption context is a collection of non-secret key-value pairs
-	// that represent additional authenticated data. When you use an encryption context
-	// to encrypt data, you must specify the same (an exact case-sensitive match)
-	// encryption context to decrypt the data. An encryption context is supported only
-	// on operations with symmetric encryption KMS keys. On operations with symmetric
+	// context. Do not include confidential or sensitive information in this field.
+	// This field may be displayed in plaintext in CloudTrail logs and other output. An
+	// encryption context is a collection of non-secret key-value pairs that represent
+	// additional authenticated data. When you use an encryption context to encrypt
+	// data, you must specify the same (an exact case-sensitive match) encryption
+	// context to decrypt the data. An encryption context is supported only on
+	// operations with symmetric encryption KMS keys. On operations with symmetric
 	// encryption KMS keys, an encryption context is optional, but it is strongly
-	// recommended. For more information, see Encryption context
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#encrypt_context)
+	// recommended. For more information, see Encryption context (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#encrypt_context)
 	// in the Key Management Service Developer Guide.
 	EncryptionContext map[string]string
 
 	// A list of grant tokens. Use a grant token when your permission to call this
 	// operation comes from a new grant that has not yet achieved eventual consistency.
-	// For more information, see Grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
-	// and Using a grant token
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
+	// For more information, see Grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html#grant_token)
+	// and Using a grant token (https://docs.aws.amazon.com/kms/latest/developerguide/grant-manage.html#using-grant-token)
 	// in the Key Management Service Developer Guide.
 	GrantTokens []string
 
@@ -176,9 +151,8 @@ type EncryptOutput struct {
 	// The encryption algorithm that was used to encrypt the plaintext.
 	EncryptionAlgorithm types.EncryptionAlgorithmSpec
 
-	// The Amazon Resource Name (key ARN
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN))
-	// of the KMS key that was used to encrypt the plaintext.
+	// The Amazon Resource Name ( key ARN (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN)
+	// ) of the KMS key that was used to encrypt the plaintext.
 	KeyId *string
 
 	// Metadata pertaining to the operation's result.
@@ -194,6 +168,9 @@ func (c *Client) addOperationEncryptMiddlewares(stack *middleware.Stack, options
 	}
 	err = stack.Deserialize.Add(&awsAwsjson11_deserializeOpEncrypt{}, middleware.After)
 	if err != nil {
+		return err
+	}
+	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
@@ -223,7 +200,7 @@ func (c *Client) addOperationEncryptMiddlewares(stack *middleware.Stack, options
 	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
 		return err
 	}
-	if err = addClientUserAgent(stack); err != nil {
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -232,10 +209,16 @@ func (c *Client) addOperationEncryptMiddlewares(stack *middleware.Stack, options
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addEncryptResolveEndpointMiddleware(stack, options); err != nil {
+		return err
+	}
 	if err = addOpEncryptValidationMiddleware(stack); err != nil {
 		return err
 	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opEncrypt(options.Region), middleware.Before); err != nil {
+		return err
+	}
+	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -245,6 +228,9 @@ func (c *Client) addOperationEncryptMiddlewares(stack *middleware.Stack, options
 		return err
 	}
 	if err = addRequestResponseLogging(stack, options); err != nil {
+		return err
+	}
+	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -257,4 +243,127 @@ func newServiceMetadataMiddleware_opEncrypt(region string) *awsmiddleware.Regist
 		SigningName:   "kms",
 		OperationName: "Encrypt",
 	}
+}
+
+type opEncryptResolveEndpointMiddleware struct {
+	EndpointResolver EndpointResolverV2
+	BuiltInResolver  builtInParameterResolver
+}
+
+func (*opEncryptResolveEndpointMiddleware) ID() string {
+	return "ResolveEndpointV2"
+}
+
+func (m *opEncryptResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
+	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
+) {
+	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
+		return next.HandleSerialize(ctx, in)
+	}
+
+	req, ok := in.Request.(*smithyhttp.Request)
+	if !ok {
+		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
+	}
+
+	if m.EndpointResolver == nil {
+		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
+	}
+
+	params := EndpointParameters{}
+
+	m.BuiltInResolver.ResolveBuiltIns(&params)
+
+	var resolvedEndpoint smithyendpoints.Endpoint
+	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
+	if err != nil {
+		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
+	}
+
+	req.URL = &resolvedEndpoint.URI
+
+	for k := range resolvedEndpoint.Headers {
+		req.Header.Set(
+			k,
+			resolvedEndpoint.Headers.Get(k),
+		)
+	}
+
+	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
+	if err != nil {
+		var nfe *internalauth.NoAuthenticationSchemesFoundError
+		if errors.As(err, &nfe) {
+			// if no auth scheme is found, default to sigv4
+			signingName := "kms"
+			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+
+		}
+		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
+		if errors.As(err, &ue) {
+			return out, metadata, fmt.Errorf(
+				"This operation requests signer version(s) %v but the client only supports %v",
+				ue.UnsupportedSchemes,
+				internalauth.SupportedSchemes,
+			)
+		}
+	}
+
+	for _, authScheme := range authSchemes {
+		switch authScheme.(type) {
+		case *internalauth.AuthenticationSchemeV4:
+			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
+			var signingName, signingRegion string
+			if v4Scheme.SigningName == nil {
+				signingName = "kms"
+			} else {
+				signingName = *v4Scheme.SigningName
+			}
+			if v4Scheme.SigningRegion == nil {
+				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
+			} else {
+				signingRegion = *v4Scheme.SigningRegion
+			}
+			if v4Scheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, signingName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
+			break
+		case *internalauth.AuthenticationSchemeV4A:
+			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
+			if v4aScheme.SigningName == nil {
+				v4aScheme.SigningName = aws.String("kms")
+			}
+			if v4aScheme.DisableDoubleEncoding != nil {
+				// The signer sets an equivalent value at client initialization time.
+				// Setting this context value will cause the signer to extract it
+				// and override the value set at client initialization time.
+				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
+			}
+			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
+			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
+			break
+		case *internalauth.AuthenticationSchemeNone:
+			break
+		}
+	}
+
+	return next.HandleSerialize(ctx, in)
+}
+
+func addEncryptResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
+	return stack.Serialize.Insert(&opEncryptResolveEndpointMiddleware{
+		EndpointResolver: options.EndpointResolverV2,
+		BuiltInResolver: &builtInResolver{
+			Region:       options.Region,
+			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
+			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
+			Endpoint:     options.BaseEndpoint,
+		},
+	}, "ResolveEndpoint", middleware.After)
 }

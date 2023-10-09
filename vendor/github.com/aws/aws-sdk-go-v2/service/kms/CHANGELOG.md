@@ -1,3 +1,109 @@
+# v1.24.5 (2023-08-21)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.24.4 (2023-08-18)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.24.3 (2023-08-17)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.24.2 (2023-08-07)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.24.1 (2023-08-01)
+
+* No change notes available for this release.
+
+# v1.24.0 (2023-07-31)
+
+* **Feature**: Adds support for smithy-modeled endpoint resolution. A new rules-based endpoint resolution will be added to the SDK which will supercede and deprecate existing endpoint resolution. Specifically, EndpointResolver will be deprecated while BaseEndpoint and EndpointResolverV2 will take its place. For more information, please see the Endpoints section in our Developer Guide.
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.23.2 (2023-07-28)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.23.1 (2023-07-13)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.23.0 (2023-07-05)
+
+* **Feature**: Added Dry Run Feature to cryptographic and cross-account mutating KMS APIs (14 in all). This feature allows users to test their permissions and parameters before making the actual API call.
+
+# v1.22.2 (2023-06-15)
+
+* No change notes available for this release.
+
+# v1.22.1 (2023-06-13)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.22.0 (2023-06-05)
+
+* **Feature**: This release includes feature to import customer's asymmetric (RSA and ECC) and HMAC keys into KMS.  It also includes feature to allow customers to specify number of days to schedule a KMS key deletion as a policy condition key.
+
+# v1.21.1 (2023-05-04)
+
+* No change notes available for this release.
+
+# v1.21.0 (2023-05-01)
+
+* **Feature**: This release makes the NitroEnclave request parameter Recipient and the response field for CiphertextForRecipient available in AWS SDKs. It also adds the regex pattern for CloudHsmClusterId validation.
+
+# v1.20.12 (2023-04-24)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.11 (2023-04-20)
+
+* No change notes available for this release.
+
+# v1.20.10 (2023-04-10)
+
+* No change notes available for this release.
+
+# v1.20.9 (2023-04-07)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.8 (2023-03-21)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.7 (2023-03-10)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.6 (2023-02-28)
+
+* **Documentation**: AWS KMS is deprecating the RSAES_PKCS1_V1_5 wrapping algorithm option in the GetParametersForImport API that is used in the AWS KMS Import Key Material feature. AWS KMS will end support for this wrapping algorithm by October 1, 2023.
+
+# v1.20.5 (2023-02-22)
+
+* **Bug Fix**: Prevent nil pointer dereference when retrieving error codes.
+
+# v1.20.4 (2023-02-20)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.3 (2023-02-15)
+
+* **Announcement**: When receiving an error response in restJson-based services, an incorrect error type may have been returned based on the content of the response. This has been fixed via PR #2012 tracked in issue #1910.
+* **Bug Fix**: Correct error type parsing for restJson services.
+
+# v1.20.2 (2023-02-03)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.20.1 (2023-01-23)
+
+* No change notes available for this release.
+
 # v1.20.0 (2023-01-05)
 
 * **Feature**: Add `ErrorCodeOverride` field to all error structs (aws/smithy-go#401).

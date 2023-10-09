@@ -21,20 +21,20 @@ import (
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
+	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
 	verificationpolicyinformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1alpha1/verificationpolicy"
-	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1beta1/taskrun"
-	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1beta1/taskrun"
+	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/taskrun"
 	resolutionclient "github.com/tektoncd/pipeline/pkg/client/resolution/injection/client"
 	resolutioninformer "github.com/tektoncd/pipeline/pkg/client/resolution/injection/informers/resolution/v1beta1/resolutionrequest"
-	resourceinformer "github.com/tektoncd/pipeline/pkg/client/resource/injection/informers/resource/v1alpha1/pipelineresource"
 	"github.com/tektoncd/pipeline/pkg/pod"
 	cloudeventclient "github.com/tektoncd/pipeline/pkg/reconciler/events/cloudevent"
 	"github.com/tektoncd/pipeline/pkg/reconciler/volumeclaim"
 	resolution "github.com/tektoncd/pipeline/pkg/resolution/resource"
+	"github.com/tektoncd/pipeline/pkg/spire"
 	"github.com/tektoncd/pipeline/pkg/taskrunmetrics"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/tektoncd/pipeline/pkg/tracing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
@@ -45,19 +45,26 @@ import (
 	"knative.dev/pkg/logging"
 )
 
+const (
+	// TracerProviderName is the name of TraceProvider
+	TracerProviderName = "taskrun-reconciler"
+)
+
 // NewController instantiates a new controller.Impl from knative.dev/pkg/controller
-func NewController(opts *pipeline.Options, clock clock.PassiveClock, tracerProvider trace.TracerProvider) func(context.Context, configmap.Watcher) *controller.Impl {
+func NewController(opts *pipeline.Options, clock clock.PassiveClock) func(context.Context, configmap.Watcher) *controller.Impl {
 	return func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
 		logger := logging.FromContext(ctx)
 		kubeclientset := kubeclient.Get(ctx)
 		pipelineclientset := pipelineclient.Get(ctx)
 		taskRunInformer := taskruninformer.Get(ctx)
-		podInformer := filteredpodinformer.Get(ctx, v1beta1.ManagedByLabelKey)
-		resourceInformer := resourceinformer.Get(ctx)
+		podInformer := filteredpodinformer.Get(ctx, v1.ManagedByLabelKey)
 		limitrangeInformer := limitrangeinformer.Get(ctx)
 		verificationpolicyInformer := verificationpolicyinformer.Get(ctx)
 		resolutionInformer := resolutioninformer.Get(ctx)
-		configStore := config.NewStore(logger.Named("config-store"), taskrunmetrics.MetricsOnStore(logger))
+		spireClient := spire.GetControllerAPIClient(ctx)
+		tracerProvider := tracing.New(TracerProviderName)
+		//nolint:contextcheck // OnStore methods does not support context as a parameter
+		configStore := config.NewStore(logger.Named("config-store"), taskrunmetrics.MetricsOnStore(logger), spire.OnStore(ctx, logger), tracerProvider.OnStore(logger))
 		configStore.WatchConfigs(cmw)
 
 		entrypointCache, err := pod.NewEntrypointCache(kubeclientset)
@@ -70,8 +77,8 @@ func NewController(opts *pipeline.Options, clock clock.PassiveClock, tracerProvi
 			PipelineClientSet:        pipelineclientset,
 			Images:                   opts.Images,
 			Clock:                    clock,
+			spireClient:              spireClient,
 			taskRunLister:            taskRunInformer.Lister(),
-			resourceLister:           resourceInformer.Lister(),
 			limitrangeLister:         limitrangeInformer.Lister(),
 			verificationPolicyLister: verificationpolicyInformer.Lister(),
 			cloudEventClient:         cloudeventclient.Get(ctx),
@@ -89,12 +96,16 @@ func NewController(opts *pipeline.Options, clock clock.PassiveClock, tracerProvi
 			}
 		})
 
-		taskRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+		if _, err := taskRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue)); err != nil {
+			logging.FromContext(ctx).Panicf("Couldn't register TaskRun informer event handler: %w", err)
+		}
 
-		podInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
-			FilterFunc: controller.FilterController(&v1beta1.TaskRun{}),
+		if _, err := podInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+			FilterFunc: controller.FilterController(&v1.TaskRun{}),
 			Handler:    controller.HandleAll(impl.EnqueueControllerOf),
-		})
+		}); err != nil {
+			logging.FromContext(ctx).Panicf("Couldn't register Pod informer event handler: %w", err)
+		}
 
 		return impl
 	}

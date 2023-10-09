@@ -9,7 +9,7 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"github.com/vdemeester/buildkit-tekton/pkg/tekton/files"
 	corev1 "k8s.io/api/core/v1"
@@ -39,18 +39,19 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 		return llb.State{}, err
 	}
 
-	var ts *v1beta1.TaskSpec
+	var ts *v1.TaskSpec
 	var name string
 	if tr.Spec.TaskSpec != nil {
 		ts = tr.Spec.TaskSpec
 		name = "embedded"
-	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Bundle != "" {
-		resolvedTask, err := resolveTaskInBundle(ctx, c, *tr.Spec.TaskRef)
-		if err != nil {
-			return llb.State{}, err
-		}
-		ts = &resolvedTask.Spec
-		name = tr.Spec.TaskRef.Name
+		// FIXME: we need to support this
+		// } else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Bundle != "" {
+		// 	resolvedTask, err := resolveTaskInBundle(ctx, c, *tr.Spec.TaskRef)
+		// 	if err != nil {
+		// 		return llb.State{}, err
+		// 	}
+		// 	ts = &resolvedTask.Spec
+		// 	name = tr.Spec.TaskRef.Name
 	} else if tr.Spec.TaskRef != nil && tr.Spec.TaskRef.Name != "" {
 		t, ok := r.tasks[tr.Spec.TaskRef.Name]
 		if !ok {
@@ -89,8 +90,8 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 	return stepStates[len(stepStates)-1], nil
 }
 
-func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1beta1.TaskSpec, taskName string) (v1beta1.TaskSpec, error) {
-	var defaults []v1beta1.ParamSpec
+func applyTaskRunSubstitution(ctx context.Context, tr *v1.TaskRun, ts *v1.TaskSpec, taskName string) (v1.TaskSpec, error) {
+	var defaults []v1.ParamSpec
 	if len(ts.Params) > 0 {
 		defaults = append(defaults, ts.Params...)
 	}
@@ -124,10 +125,10 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1beta1.TaskRun, ts *v1be
 	return *ts, nil
 }
 
-func taskSpecToPSteps(ctx context.Context, c client.Client, t v1beta1.TaskSpec, name string, workspaces []mountOptionFn) ([]pstep, error) {
+func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name string, workspaces []mountOptionFn) ([]pstep, error) {
 	steps := make([]pstep, len(t.Steps))
 	cacheDirName := name + "/results"
-	mergedSteps, err := v1beta1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
+	mergedSteps, err := v1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
 	if err != nil {
 		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
 	}
@@ -218,7 +219,7 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 	return stepStates, nil
 }
 
-func validateTaskRun(ctx context.Context, tr *v1beta1.TaskRun) error {
+func validateTaskRun(ctx context.Context, tr *v1.TaskRun) error {
 	if tr.Name == "" && tr.GenerateName != "" {
 		tr.Name = tr.GenerateName + "generated"
 	}
@@ -235,10 +236,7 @@ func validateTaskRun(ctx context.Context, tr *v1beta1.TaskRun) error {
 	return nil
 }
 
-func validateTaskSpec(ctx context.Context, t v1beta1.TaskSpec) error {
-	if t.Resources != nil {
-		return errors.New("PipelineResources are not supported")
-	}
+func validateTaskSpec(ctx context.Context, t v1.TaskSpec) error {
 	if len(t.Sidecars) > 0 {
 		return errors.New("Sidecars are not supported")
 	}

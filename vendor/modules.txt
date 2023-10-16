@@ -760,7 +760,7 @@ github.com/spiffe/go-spiffe/v2/workloadapi
 ## explicit; go 1.12
 github.com/spiffe/spire-api-sdk/proto/spire/api/server/entry/v1
 github.com/spiffe/spire-api-sdk/proto/spire/api/types
-# github.com/tektoncd/pipeline v0.52.0
+# github.com/tektoncd/pipeline v0.52.1
 ## explicit; go 1.19
 github.com/tektoncd/pipeline/internal/sidecarlogresults
 github.com/tektoncd/pipeline/pkg/apis/config

@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
+	"github.com/google/cel-go/cel"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -64,6 +66,52 @@ type ResolvedPipelineTask struct {
 	CustomRuns     []*v1beta1.CustomRun
 	PipelineTask   *v1.PipelineTask
 	ResolvedTask   *resources.ResolvedTask
+	ResultsCache   map[string][]string
+	// EvaluatedCEL is used to store the results of evaluated CEL expression
+	EvaluatedCEL map[string]bool
+}
+
+// EvaluateCEL evaluate the CEL expressions, and store the evaluated results in EvaluatedCEL
+func (t *ResolvedPipelineTask) EvaluateCEL() error {
+	if t.PipelineTask != nil {
+		if len(t.EvaluatedCEL) == 0 {
+			t.EvaluatedCEL = make(map[string]bool)
+		}
+		for _, we := range t.PipelineTask.When {
+			if we.CEL == "" {
+				continue
+			}
+			_, ok := t.EvaluatedCEL[we.CEL]
+			if !ok {
+				// Create a program environment configured with the standard library of CEL functions and macros
+				// The error is omitted because not environment declarations are passed in.
+				env, _ := cel.NewEnv()
+				// Parse and Check the CEL to get the Abstract Syntax Tree
+				ast, iss := env.Compile(we.CEL)
+				if iss.Err() != nil {
+					return iss.Err()
+				}
+				// Generate an evaluable instance of the Ast within the environment
+				prg, err := env.Program(ast)
+				if err != nil {
+					return err
+				}
+				// Evaluate the CEL expression
+				out, _, err := prg.Eval(map[string]interface{}{})
+				if err != nil {
+					return err
+				}
+
+				b, ok := out.Value().(bool)
+				if ok {
+					t.EvaluatedCEL[we.CEL] = b
+				} else {
+					return fmt.Errorf("The CEL expression %s is not evaluated to a boolean", we.CEL)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // isDone returns true only if the task is skipped, succeeded or failed
@@ -307,7 +355,7 @@ func (t *ResolvedPipelineTask) Skip(facts *PipelineRunFacts) TaskSkipStatus {
 // it returns true if any of the when expressions evaluate to false
 func (t *ResolvedPipelineTask) skipBecauseWhenExpressionsEvaluatedToFalse(facts *PipelineRunFacts) bool {
 	if t.checkParentsDone(facts) {
-		if !t.PipelineTask.When.AllowsExecution() {
+		if !t.PipelineTask.When.AllowsExecution(t.EvaluatedCEL) {
 			return true
 		}
 	}
@@ -740,4 +788,23 @@ func CheckMissingResultReferences(pipelineRunState PipelineRunState, targets Pip
 		}
 	}
 	return nil
+}
+
+// createResultsCacheMatrixedTaskRuns creates a cache of results that have been fanned out from a
+// referenced matrixed PipelintTask so that you can easily access these results in subsequent Pipeline Tasks
+func createResultsCacheMatrixedTaskRuns(rpt *ResolvedPipelineTask) (resultsCache map[string][]string) {
+	if len(rpt.ResultsCache) == 0 {
+		resultsCache = make(map[string][]string)
+	}
+	// Sort the taskRuns by name to ensure the order is deterministic
+	sort.Slice(rpt.TaskRuns, func(i, j int) bool {
+		return rpt.TaskRuns[i].Name < rpt.TaskRuns[j].Name
+	})
+	for _, taskRun := range rpt.TaskRuns {
+		results := taskRun.Status.Results
+		for _, result := range results {
+			resultsCache[result.Name] = append(resultsCache[result.Name], result.Value.StringVal)
+		}
+	}
+	return resultsCache
 }

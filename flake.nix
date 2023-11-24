@@ -1,10 +1,7 @@
 {
   description = "buildkit-tekton nix package";
 
-  # Nixpkgs / NixOS version to use.
-  inputs.nixpkgs.url = "nixpkgs/nixos-21.11";
-
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, ... }@inputs:
     let
 
       # Generate a user-friendly version number.
@@ -28,7 +25,7 @@
           pkgs = nixpkgsFor.${system};
         in
         {
-          buildkit-tekton = pkgs.buildGo117Module {
+          buildkit-tekton = pkgs.buildGo120Module {
             pname = "buildkit-tekton";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree
@@ -39,7 +36,7 @@
             # We use vendor, no need for vendorSha256
             vendorSha256 = null;
           };
-          tkn-local-run = pkgs.buildGo117Module {
+          tkn-local-run = pkgs.buildGo120Module {
             pname = "tkn-local-run";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree
@@ -70,5 +67,14 @@
       # flake provides only one package or there is a clear "main"
       # package.
       defaultPackage = forAllSystems (system: self.packages.${system}.buildkit-tekton);
+
+      githubActions = inputs.nix-github-actions.lib.mkGithubMatrix {
+        checks = nixpkgs.lib.getAttrs [ "x86_64-linux" ] self.packages;
+      };
     };
+
+  # Nixpkgs / NixOS version to use.
+  inputs.nixpkgs.url = "nixpkgs/nixos-23.05";
+  inputs.nix-github-actions.url = "github:nix-community/nix-github-actions";
+  inputs.nix-github-actions.inputs.nixpkgs.follows = "nixpkgs";
 }

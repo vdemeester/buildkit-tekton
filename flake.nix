@@ -36,13 +36,13 @@
             # We use vendor, no need for vendorSha256
             vendorSha256 = null;
           };
-          tkn-local-run = pkgs.buildGo120Module {
-            pname = "tkn-local-run";
+          tkn-local = pkgs.buildGo120Module {
+            pname = "tkn-local";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree
             # in the Nix store.
             src = ./.;
-            subPackages = [ "cmd/tkn-local-run" ];
+            subPackages = [ "cmd/tkn-local" ];
 
             # We use vendor, no need for vendorSha256
             vendorSha256 = null;

@@ -1,6 +1,6 @@
 module github.com/vdemeester/buildkit-tekton
 
-go 1.18
+go 1.20
 
 require (
 	github.com/docker/cli v24.0.7+incompatible

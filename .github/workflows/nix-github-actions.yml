@@ -29,4 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v23
+      - uses: cachix/cachix-action@v12
+        with:
+          name: vdemeester
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
       - run: nix build -L ".#${{ matrix.attr }}"

@@ -14,9 +14,9 @@ require (
 	github.com/tektoncd/pipeline v0.53.2
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea
 	golang.org/x/sync v0.4.0
-	k8s.io/api v0.28.2
+	k8s.io/api v0.28.4
 	k8s.io/apimachinery v0.28.4
-	k8s.io/client-go v0.28.2
+	k8s.io/client-go v0.28.4
 )
 
 require (

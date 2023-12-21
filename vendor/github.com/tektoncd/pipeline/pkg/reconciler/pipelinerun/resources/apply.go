@@ -160,7 +160,7 @@ func filterMatrixContextVar(params v1.Params) v1.Params {
 				// tasks.<pipelineTaskName>.matrix.length
 				// tasks.<pipelineTaskName>.matrix.<resultName>.length
 				subExpressions := strings.Split(expression, ".")
-				if subExpressions[2] == "matrix" && subExpressions[len(subExpressions)-1] == "length" {
+				if len(subExpressions) >= 4 && subExpressions[2] == "matrix" && subExpressions[len(subExpressions)-1] == "length" {
 					filteredParams = append(filteredParams, param)
 				}
 			}
@@ -367,9 +367,9 @@ func propagateParams(t v1.PipelineTask, stringReplacements map[string]string, ar
 				}
 			}
 		}
-		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacementsDup, arrayReplacementsDup)
+		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacementsDup, arrayReplacementsDup, objectReplacementsDup)
 	} else {
-		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacements, arrayReplacements)
+		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacements, arrayReplacements, objectReplacements)
 	}
 	return t
 }
@@ -395,7 +395,7 @@ func PropagateResults(rpt *ResolvedPipelineTask, runStates PipelineRunState) {
 			}
 		}
 	}
-	rpt.ResolvedTask.TaskSpec = resources.ApplyReplacements(rpt.ResolvedTask.TaskSpec, stringReplacements, arrayReplacements)
+	rpt.ResolvedTask.TaskSpec = resources.ApplyReplacements(rpt.ResolvedTask.TaskSpec, stringReplacements, arrayReplacements, map[string]map[string]string{})
 }
 
 // ApplyTaskResultsToPipelineResults applies the results of completed TasksRuns and Runs to a Pipeline's

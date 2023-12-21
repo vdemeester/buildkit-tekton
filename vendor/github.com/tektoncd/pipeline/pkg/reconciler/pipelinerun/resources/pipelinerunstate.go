@@ -380,6 +380,22 @@ func (facts *PipelineRunFacts) GetFinalTasks() PipelineRunState {
 	return tasks
 }
 
+// IsFinalTaskStarted returns true if all DAG pipelineTasks is finished and one or more final tasks have been created.
+func (facts *PipelineRunFacts) IsFinalTaskStarted() bool {
+	// check either pipeline has finished executing all DAG pipelineTasks,
+	// where "finished executing" means succeeded, failed, or skipped.
+	if facts.checkDAGTasksDone() {
+		// return list of tasks with all final tasks
+		for _, t := range facts.State {
+			if facts.isFinalTask(t.PipelineTask.Name) && t.isScheduled() {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // GetPipelineConditionStatus will return the Condition that the PipelineRun prName should be
 // updated with, based on the status of the TaskRuns in state.
 func (facts *PipelineRunFacts) GetPipelineConditionStatus(ctx context.Context, pr *v1.PipelineRun, logger *zap.SugaredLogger, c clock.PassiveClock) *apis.Condition {
@@ -527,7 +543,7 @@ func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 			if facts.isDAGTask(t.PipelineTask.Name) {
 				// if any of the dag task failed, change the aggregate status to failed and return
 				if !t.IsCustomTask() && t.haveAnyTaskRunsFailed() || t.IsCustomTask() && t.haveAnyCustomRunsFailed() {
-					aggregateStatus = v1beta1.PipelineRunReasonFailed.String()
+					aggregateStatus = v1.PipelineRunReasonFailed.String()
 					break
 				}
 				// if any of the dag task skipped, change the aggregate status to completed
@@ -539,6 +555,30 @@ func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 		}
 	}
 	tStatus[v1.PipelineTasksAggregateStatus] = aggregateStatus
+	return tStatus
+}
+
+// GetPipelineTaskStatus returns the status of a PipelineFinalTask depending on its taskRun
+func (facts *PipelineRunFacts) GetPipelineFinalTaskStatus() map[string]string {
+	// construct a map of tasks.<pipelineTask>.status and its state
+	tStatus := make(map[string]string)
+	for _, t := range facts.State {
+		if facts.isFinalTask(t.PipelineTask.Name) {
+			var s string
+			switch {
+			// execution status is Succeeded when a task has succeeded condition with status set to true
+			case t.isSuccessful():
+				s = v1.TaskRunReasonSuccessful.String()
+			// execution status is Failed when a task has succeeded condition with status set to false
+			case t.haveAnyRunsFailed():
+				s = v1.TaskRunReasonFailed.String()
+			default:
+				// None includes skipped as well
+				s = PipelineTaskStateNone
+			}
+			tStatus[PipelineTaskStatusPrefix+t.PipelineTask.Name+PipelineTaskStatusSuffix] = s
+		}
+	}
 	return tStatus
 }
 

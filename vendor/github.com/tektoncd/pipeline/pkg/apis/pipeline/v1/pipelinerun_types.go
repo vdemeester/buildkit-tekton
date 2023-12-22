@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
-	apisconfig "github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	runv1beta1 "github.com/tektoncd/pipeline/pkg/apis/run/v1beta1"
@@ -117,7 +116,7 @@ func (pr *PipelineRun) TasksTimeout() *metav1.Duration {
 		return t.Tasks
 	}
 	if t.Pipeline != nil && t.Finally != nil {
-		if t.Pipeline.Duration == apisconfig.NoTimeoutDuration || t.Finally.Duration == apisconfig.NoTimeoutDuration {
+		if t.Pipeline.Duration == config.NoTimeoutDuration || t.Finally.Duration == config.NoTimeoutDuration {
 			return nil
 		}
 		return &metav1.Duration{Duration: (t.Pipeline.Duration - t.Finally.Duration)}
@@ -136,7 +135,7 @@ func (pr *PipelineRun) FinallyTimeout() *metav1.Duration {
 		return t.Finally
 	}
 	if t.Pipeline != nil && t.Tasks != nil {
-		if t.Pipeline.Duration == apisconfig.NoTimeoutDuration || t.Tasks.Duration == apisconfig.NoTimeoutDuration {
+		if t.Pipeline.Duration == config.NoTimeoutDuration || t.Tasks.Duration == config.NoTimeoutDuration {
 			return nil
 		}
 		return &metav1.Duration{Duration: (t.Pipeline.Duration - t.Tasks.Duration)}
@@ -382,6 +381,10 @@ const (
 	// ReasonFailedValidation indicates that the reason for failure status is
 	// that pipelinerun failed runtime validation
 	PipelineRunReasonFailedValidation PipelineRunReason = "PipelineValidationFailed"
+	// PipelineRunReasonCouldntGetPipelineResult indicates that the pipeline fails to retrieve the
+	// referenced result. This could be due to failed TaskRuns or Runs that were supposed to produce
+	// the results
+	PipelineRunReasonCouldntGetPipelineResult PipelineRunReason = "CouldntGetPipelineResult"
 	// ReasonInvalidGraph indicates that the reason for the failure status is that the
 	// associated Pipeline is an invalid graph (a.k.a wrong order, cycle, …)
 	PipelineRunReasonInvalidGraph PipelineRunReason = "PipelineInvalidGraph"
@@ -409,7 +412,12 @@ const (
 	PipelineRunReasonCreateRunFailed PipelineRunReason = "CreateRunFailed"
 	// ReasonCELEvaluationFailed indicates the pipeline fails the CEL evaluation
 	PipelineRunReasonCELEvaluationFailed PipelineRunReason = "CELEvaluationFailed"
+	// PipelineRunReasonInvalidParamValue indicates that the PipelineRun Param input value is not allowed.
+	PipelineRunReasonInvalidParamValue PipelineRunReason = "InvalidParamValue"
 )
+
+// PipelineTaskOnErrorAnnotation is used to pass the failure strategy to TaskRun pods from PipelineTask OnError field
+const PipelineTaskOnErrorAnnotation = "pipeline.tekton.dev/pipeline-task-on-error"
 
 func (t PipelineRunReason) String() string {
 	return string(t)

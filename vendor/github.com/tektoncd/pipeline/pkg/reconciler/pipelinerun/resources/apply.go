@@ -160,7 +160,7 @@ func filterMatrixContextVar(params v1.Params) v1.Params {
 				// tasks.<pipelineTaskName>.matrix.length
 				// tasks.<pipelineTaskName>.matrix.<resultName>.length
 				subExpressions := strings.Split(expression, ".")
-				if subExpressions[2] == "matrix" && subExpressions[len(subExpressions)-1] == "length" {
+				if len(subExpressions) >= 4 && subExpressions[2] == "matrix" && subExpressions[len(subExpressions)-1] == "length" {
 					filteredParams = append(filteredParams, param)
 				}
 			}
@@ -367,9 +367,9 @@ func propagateParams(t v1.PipelineTask, stringReplacements map[string]string, ar
 				}
 			}
 		}
-		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacementsDup, arrayReplacementsDup)
+		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacementsDup, arrayReplacementsDup, objectReplacementsDup)
 	} else {
-		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacements, arrayReplacements)
+		t.TaskSpec.TaskSpec = *resources.ApplyReplacements(&t.TaskSpec.TaskSpec, stringReplacements, arrayReplacements, objectReplacements)
 	}
 	return t
 }
@@ -395,7 +395,7 @@ func PropagateResults(rpt *ResolvedPipelineTask, runStates PipelineRunState) {
 			}
 		}
 	}
-	rpt.ResolvedTask.TaskSpec = resources.ApplyReplacements(rpt.ResolvedTask.TaskSpec, stringReplacements, arrayReplacements)
+	rpt.ResolvedTask.TaskSpec = resources.ApplyReplacements(rpt.ResolvedTask.TaskSpec, stringReplacements, arrayReplacements, map[string]map[string]string{})
 }
 
 // ApplyTaskResultsToPipelineResults applies the results of completed TasksRuns and Runs to a Pipeline's
@@ -433,7 +433,7 @@ func ApplyTaskResultsToPipelineResults(
 			}
 			variableParts := strings.Split(variable, ".")
 
-			if (variableParts[0] != v1beta1.ResultTaskPart && variableParts[0] != v1beta1.ResultFinallyPart) || variableParts[2] != v1beta1.ResultResultPart {
+			if (variableParts[0] != v1.ResultTaskPart && variableParts[0] != v1.ResultFinallyPart) || variableParts[2] != v1beta1.ResultResultPart {
 				validPipelineResult = false
 				invalidPipelineResults = append(invalidPipelineResults, pipelineResult.Name)
 				continue
@@ -470,7 +470,7 @@ func ApplyTaskResultsToPipelineResults(
 				} else {
 					// if the task is not successful (e.g. skipped or failed) and the results is missing, don't return error
 					if status, ok := taskstatus[PipelineTaskStatusPrefix+taskName+PipelineTaskStatusSuffix]; ok {
-						if status != v1beta1.TaskRunReasonSuccessful.String() {
+						if status != v1.TaskRunReasonSuccessful.String() {
 							validPipelineResult = false
 							continue
 						}
@@ -494,7 +494,7 @@ func ApplyTaskResultsToPipelineResults(
 				} else {
 					// if the task is not successful (e.g. skipped or failed) and the results is missing, don't return error
 					if status, ok := taskstatus[PipelineTaskStatusPrefix+taskName+PipelineTaskStatusSuffix]; ok {
-						if status != v1beta1.TaskRunReasonSuccessful.String() {
+						if status != v1.TaskRunReasonSuccessful.String() {
 							validPipelineResult = false
 							continue
 						}
@@ -519,7 +519,7 @@ func ApplyTaskResultsToPipelineResults(
 	}
 
 	if len(invalidPipelineResults) > 0 {
-		return runResults, fmt.Errorf("invalid pipelineresults %v, the referred results don't exist", invalidPipelineResults)
+		return runResults, fmt.Errorf("invalid pipelineresults %v, the referenced results don't exist", invalidPipelineResults)
 	}
 
 	return runResults, nil

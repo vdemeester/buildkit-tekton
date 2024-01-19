@@ -3,7 +3,7 @@ module github.com/vdemeester/buildkit-tekton
 go 1.20
 
 require (
-	github.com/docker/cli v24.0.7+incompatible
+	github.com/docker/cli v25.0.0+incompatible
 	github.com/docker/distribution v2.8.3+incompatible
 	github.com/google/go-cmp v0.6.0
 	github.com/moby/buildkit v0.12.4

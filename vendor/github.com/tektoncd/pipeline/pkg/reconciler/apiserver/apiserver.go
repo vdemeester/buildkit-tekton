@@ -6,7 +6,9 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	pipelineErrors "github.com/tektoncd/pipeline/pkg/apis/pipeline/errors"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -56,6 +58,13 @@ func DryRunValidate(ctx context.Context, namespace string, obj runtime.Object, t
 		if _, err := tekton.TektonV1beta1().Tasks(namespace).Create(ctx, dryRunObj, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}); err != nil {
 			return handleDryRunCreateErr(err, obj.Name)
 		}
+	case *v1alpha1.StepAction:
+		dryRunObj := obj.DeepCopy()
+		dryRunObj.Name = dryRunObjName
+		dryRunObj.Namespace = namespace // Make sure the namespace is the same as the StepAction
+		if _, err := tekton.TektonV1alpha1().StepActions(namespace).Create(ctx, dryRunObj, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}); err != nil {
+			return handleDryRunCreateErr(err, obj.Name)
+		}
 	default:
 		return fmt.Errorf("unsupported object GVK %s", obj.GetObjectKind().GroupVersionKind())
 	}
@@ -68,7 +77,7 @@ func handleDryRunCreateErr(err error, objectName string) error {
 	case apierrors.IsBadRequest(err): // Object rejected by validating webhook
 		errType = ErrReferencedObjectValidationFailed
 	case apierrors.IsInvalid(err), apierrors.IsMethodNotSupported(err):
-		errType = ErrCouldntValidateObjectPermanent
+		errType = pipelineErrors.WrapUserError(ErrCouldntValidateObjectPermanent)
 	case apierrors.IsTimeout(err), apierrors.IsServerTimeout(err), apierrors.IsTooManyRequests(err):
 		errType = ErrCouldntValidateObjectRetryable
 	default:

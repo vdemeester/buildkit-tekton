@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 
+	pipelineErrors "github.com/tektoncd/pipeline/pkg/apis/pipeline/errors"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 )
@@ -28,7 +29,7 @@ import (
 var (
 	// ErrInvalidTaskResultReference indicates that the reason for the failure status is that there
 	// is an invalid task result reference
-	ErrInvalidTaskResultReference = errors.New("Invalid task result reference")
+	ErrInvalidTaskResultReference = pipelineErrors.WrapUserError(errors.New("Invalid task result reference"))
 )
 
 // ResolvedResultRefs represents all of the ResolvedResultRef for a pipeline task
@@ -70,8 +71,8 @@ func ResolveResultRefs(pipelineRunState PipelineRunState, targets PipelineRunSta
 func validateArrayResultsIndex(allResolvedResultRefs ResolvedResultRefs) error {
 	for _, r := range allResolvedResultRefs {
 		if r.Value.Type == v1.ParamTypeArray {
-			if r.ResultReference.ResultsIndex >= len(r.Value.ArrayVal) {
-				return fmt.Errorf("Array Result Index %d for Task %s Result %s is out of bound of size %d", r.ResultReference.ResultsIndex, r.ResultReference.PipelineTask, r.ResultReference.Result, len(r.Value.ArrayVal))
+			if r.ResultReference.ResultsIndex != nil && *r.ResultReference.ResultsIndex >= len(r.Value.ArrayVal) {
+				return fmt.Errorf("array Result Index %d for Task %s Result %s is out of bound of size %d", *r.ResultReference.ResultsIndex, r.ResultReference.PipelineTask, r.ResultReference.Result, len(r.Value.ArrayVal))
 			}
 		}
 	}

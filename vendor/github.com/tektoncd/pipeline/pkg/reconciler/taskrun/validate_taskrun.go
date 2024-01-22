@@ -28,6 +28,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/strings/slices"
 )
 
 // validateParams validates that all Pipeline Task, Matrix.Params and Matrix.Include parameters all have values, match the specified
@@ -174,6 +175,35 @@ func ValidateResolvedTask(ctx context.Context, params []v1.Param, matrix *v1.Mat
 	return nil
 }
 
+// ValidateEnumParam validates the param values are in the defined enum list in the corresponding paramSpecs if provided.
+// A validation error is returned otherwise.
+func ValidateEnumParam(ctx context.Context, params []v1.Param, paramSpecs v1.ParamSpecs) error {
+	paramSpecNameToEnum := map[string][]string{}
+	for _, ps := range paramSpecs {
+		if len(ps.Enum) == 0 {
+			continue
+		}
+		paramSpecNameToEnum[ps.Name] = ps.Enum
+	}
+
+	for _, p := range params {
+		// skip validation for and non-string typed and optional params (using default value)
+		// the default value of param is validated at validation webhook dryrun
+		if p.Value.Type != v1.ParamTypeString || p.Value.StringVal == "" {
+			continue
+		}
+		// skip validation for paramSpec without enum
+		if _, ok := paramSpecNameToEnum[p.Name]; !ok {
+			continue
+		}
+
+		if !slices.Contains(paramSpecNameToEnum[p.Name], p.Value.StringVal) {
+			return fmt.Errorf("param `%s` value: %s is not in the enum list", p.Name, p.Value.StringVal)
+		}
+	}
+	return nil
+}
+
 func validateTaskSpecRequestResources(taskSpec *v1.TaskSpec) error {
 	if taskSpec != nil {
 		for _, step := range taskSpec.Steps {
@@ -181,13 +211,13 @@ func validateTaskSpecRequestResources(taskSpec *v1.TaskSpec) error {
 				// First validate the limit in step
 				if limit, ok := step.ComputeResources.Limits[k]; ok {
 					if (&limit).Cmp(request) == -1 {
-						return fmt.Errorf("Invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
+						return fmt.Errorf("invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
 					}
 				} else if taskSpec.StepTemplate != nil {
 					// If step doesn't configure the limit, validate the limit in stepTemplate
 					if limit, ok := taskSpec.StepTemplate.ComputeResources.Limits[k]; ok {
 						if (&limit).Cmp(request) == -1 {
-							return fmt.Errorf("Invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
+							return fmt.Errorf("invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
 						}
 					}
 				}

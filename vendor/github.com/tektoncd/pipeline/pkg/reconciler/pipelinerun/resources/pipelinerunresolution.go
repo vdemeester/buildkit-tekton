@@ -25,10 +25,12 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	pipelineErrors "github.com/tektoncd/pipeline/pkg/apis/pipeline/errors"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"github.com/tektoncd/pipeline/pkg/remote"
+	"github.com/tektoncd/pipeline/pkg/substitution"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmeta"
@@ -392,7 +394,9 @@ func (t *ResolvedPipelineTask) skipBecauseResultReferencesAreMissing(facts *Pipe
 		resolvedResultRefs, pt, err := ResolveResultRefs(facts.State, PipelineRunState{t})
 		rpt := facts.State.ToMap()[pt]
 		if rpt != nil {
-			if err != nil && (t.IsFinalTask(facts) || rpt.Skip(facts).SkippingReason == v1.WhenExpressionsSkip) {
+			if err != nil &&
+				(t.PipelineTask.OnError == v1.PipelineTaskContinue ||
+					(t.IsFinalTask(facts) || rpt.Skip(facts).SkippingReason == v1.WhenExpressionsSkip)) {
 				return true
 			}
 		}
@@ -506,7 +510,7 @@ func ValidateWorkspaceBindings(p *v1.PipelineSpec, pr *v1.PipelineRun) error {
 			continue
 		}
 		if _, ok := pipelineRunWorkspaces[ws.Name]; !ok {
-			return fmt.Errorf("pipeline requires workspace with name %q be provided by pipelinerun", ws.Name)
+			return pipelineErrors.WrapUserError(fmt.Errorf("pipeline requires workspace with name %q be provided by pipelinerun", ws.Name))
 		}
 	}
 	return nil
@@ -525,7 +529,7 @@ func ValidateTaskRunSpecs(p *v1.PipelineSpec, pr *v1.PipelineRun) error {
 
 	for _, taskrunSpec := range pr.Spec.TaskRunSpecs {
 		if _, ok := pipelineTasks[taskrunSpec.PipelineTaskName]; !ok {
-			return fmt.Errorf("PipelineRun's taskrunSpecs defined wrong taskName: %q, does not exist in Pipeline", taskrunSpec.PipelineTaskName)
+			return pipelineErrors.WrapUserError(fmt.Errorf("pipelineRun's taskrunSpecs defined wrong taskName: %q, does not exist in Pipeline", taskrunSpec.PipelineTaskName))
 		}
 	}
 	return nil
@@ -807,4 +811,73 @@ func createResultsCacheMatrixedTaskRuns(rpt *ResolvedPipelineTask) (resultsCache
 		}
 	}
 	return resultsCache
+}
+
+// ValidateParamEnumSubset finds the referenced pipeline-level params in the resolved pipelineTask.
+// It then validates if the referenced pipeline-level param enums are subsets of the resolved pipelineTask-level param enums
+func ValidateParamEnumSubset(pipelineTaskParams []v1.Param, pipelineParamSpecs []v1.ParamSpec, rt *resources.ResolvedTask) error {
+	for _, p := range pipelineTaskParams {
+		// calculate referenced param enums
+		res, present, errString := substitution.ExtractVariablesFromString(p.Value.StringVal, "params")
+		if errString != "" {
+			return fmt.Errorf("unexpected error in ExtractVariablesFromString: %s", errString)
+		}
+
+		// if multiple params are extracted, that means the task-level param is a compounded value, skip subset validation
+		if !present || len(res) > 1 {
+			continue
+		}
+
+		// resolve pipeline-level and pipelineTask-level enums
+		paramName := substitution.TrimArrayIndex(res[0])
+		pipelineParam := getParamFromName(paramName, pipelineParamSpecs)
+		resolvedTaskParam := getParamFromName(p.Name, rt.TaskSpec.Params)
+
+		// param enum is only supported for string param type,
+		// we only validate the enum subset requirement for string typed param.
+		// If there is no task-level enum (allowing any value), any pipeline-level enum is allowed
+		if pipelineParam.Type != v1.ParamTypeString || len(resolvedTaskParam.Enum) == 0 {
+			return nil
+		}
+
+		// if pipelin-level enum is empty (allowing any value) but task-level enum is not, it is not a "subset"
+		if len(pipelineParam.Enum) == 0 && len(resolvedTaskParam.Enum) > 0 {
+			return fmt.Errorf("pipeline param \"%s\" has no enum, but referenced in \"%s\" task has enums: %v", pipelineParam.Name, rt.TaskName, resolvedTaskParam.Enum)
+		}
+
+		// validate if pipeline-level enum is a subset of pipelineTask-level enum
+		if isValid := isSubset(pipelineParam.Enum, resolvedTaskParam.Enum); !isValid {
+			return fmt.Errorf("pipeline param \"%s\" enum: %v is not a subset of the referenced in \"%s\" task param enum: %v", pipelineParam.Name, pipelineParam.Enum, rt.TaskName, resolvedTaskParam.Enum)
+		}
+	}
+
+	return nil
+}
+
+func isSubset(pipelineEnum, taskEnum []string) bool {
+	pipelineEnumMap := make(map[string]bool)
+	TaskEnumMap := make(map[string]bool)
+	for _, e := range pipelineEnum {
+		pipelineEnumMap[e] = true
+	}
+	for _, e := range taskEnum {
+		TaskEnumMap[e] = true
+	}
+
+	for e := range pipelineEnumMap {
+		if !TaskEnumMap[e] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func getParamFromName(name string, pss v1.ParamSpecs) v1.ParamSpec {
+	for _, ps := range pss {
+		if ps.Name == name {
+			return ps
+		}
+	}
+	return v1.ParamSpec{}
 }

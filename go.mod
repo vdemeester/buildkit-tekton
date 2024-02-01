@@ -6,7 +6,7 @@ require (
 	github.com/docker/cli v25.0.1+incompatible
 	github.com/docker/distribution v2.8.3+incompatible
 	github.com/google/go-cmp v0.6.0
-	github.com/moby/buildkit v0.12.4
+	github.com/moby/buildkit v0.12.5
 	github.com/moby/term v0.5.0
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3

@@ -36,7 +36,7 @@
             # We use vendor, no need for vendorSha256
             vendorSha256 = null;
           };
-          tkn-local = pkgs.buildGo120Module {
+          tkn-local = pkgs.buildGo121Module {
             pname = "tkn-local";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree

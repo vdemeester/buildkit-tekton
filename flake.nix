@@ -33,8 +33,8 @@
             src = ./.;
             subPackages = [ "cmd/buildkit-tekton" ];
 
-            # We use vendor, no need for vendorSha256
-            vendorSha256 = null;
+            # We use vendor, no need for vendorHash
+            vendorHash = null;
           };
           tkn-local = pkgs.buildGo121Module {
             pname = "tkn-local";
@@ -44,8 +44,8 @@
             src = ./.;
             subPackages = [ "cmd/tkn-local" ];
 
-            # We use vendor, no need for vendorSha256
-            vendorSha256 = null;
+            # We use vendor, no need for vendorHash
+            vendorHash = null;
           };
           docker =
             let

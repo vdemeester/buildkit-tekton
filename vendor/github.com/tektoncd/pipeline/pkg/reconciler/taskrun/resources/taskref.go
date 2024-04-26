@@ -52,8 +52,8 @@ func GetTaskKind(taskrun *v1.TaskRun) v1.TaskKind {
 	return kind
 }
 
-// GetTaskFuncFromTaskRun is a factory function that will use the given TaskRef as context to return a valid GetTask function. It
-// also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
+// GetTaskFuncFromTaskRun is a factory function that will use the given TaskRef as context to return a valid GetTask function.
+// It also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
 // cluster or authorize against an external repositroy. It will figure out whether it needs to look in the cluster or in
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 // OCI bundle and remote resolution tasks will be verified by trusted resources if the feature is enabled
@@ -78,8 +78,8 @@ func GetTaskFuncFromTaskRun(ctx context.Context, k8s kubernetes.Interface, tekto
 	return GetTaskFunc(ctx, k8s, tekton, requester, taskrun, taskrun.Spec.TaskRef, taskrun.Name, taskrun.Namespace, taskrun.Spec.ServiceAccountName, verificationPolicies)
 }
 
-// GetTaskFunc is a factory function that will use the given TaskRef as context to return a valid GetTask function. It
-// also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
+// GetTaskFunc is a factory function that will use the given TaskRef as context to return a valid GetTask function.
+// It also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
 // cluster or authorize against an external repositroy. It will figure out whether it needs to look in the cluster or in
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 // OCI bundle and remote resolution tasks will be verified by trusted resources if the feature is enabled
@@ -97,7 +97,7 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 		return func(ctx context.Context, name string) (*v1.Task, *v1.RefSource, *trustedresources.VerificationResult, error) {
 			var replacedParams v1.Params
 			if ownerAsTR, ok := owner.(*v1.TaskRun); ok {
-				stringReplacements, arrayReplacements := paramsFromTaskRun(ctx, ownerAsTR)
+				stringReplacements, arrayReplacements, _ := replacementsFromParams(ownerAsTR.Spec.Params)
 				for k, v := range getContextReplacements("", ownerAsTR) {
 					stringReplacements[k] = v
 				}
@@ -123,6 +123,70 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 	}
 }
 
+// GetStepActionFunc is a factory function that will use the given Ref as context to return a valid GetStepAction function.
+// It also requires a kubeclient, tektonclient, requester in case it needs to find that task in
+// cluster or authorize against an external repository. It will figure out whether it needs to look in the cluster or in
+// a remote location to fetch the reference.
+func GetStepActionFunc(tekton clientset.Interface, k8s kubernetes.Interface, requester remoteresource.Requester, tr *v1.TaskRun, step *v1.Step) GetStepAction {
+	trName := tr.Name
+	namespace := tr.Namespace
+	if step.Ref != nil && step.Ref.Resolver != "" && requester != nil {
+		// Return an inline function that implements GetStepAction by calling Resolver.Get with the specified StepAction type and
+		// casting it to a StepAction.
+		return func(ctx context.Context, name string) (*v1alpha1.StepAction, *v1.RefSource, error) {
+			// Perform params replacements for StepAction resolver params
+			ApplyParameterSubstitutionInResolverParams(tr, step)
+			resolver := resolution.NewResolver(requester, tr, string(step.Ref.Resolver), trName, namespace, step.Ref.Params)
+			return resolveStepAction(ctx, resolver, name, namespace, k8s, tekton)
+		}
+	}
+	local := &LocalStepActionRefResolver{
+		Namespace:    namespace,
+		Tektonclient: tekton,
+	}
+	return local.GetStepAction
+}
+
+// ApplyParameterSubstitutionInResolverParams applies parameter substitutions in resolver params for Step Ref.
+func ApplyParameterSubstitutionInResolverParams(tr *v1.TaskRun, step *v1.Step) {
+	stringReplacements := make(map[string]string)
+	arrayReplacements := make(map[string][]string)
+	objectReplacements := make(map[string]map[string]string)
+	if tr.Spec.TaskSpec != nil {
+		defaultSR, defaultAR, defaultOR := replacementsFromDefaultParams(tr.Spec.TaskSpec.Params)
+		stringReplacements, arrayReplacements, objectReplacements = extendReplacements(stringReplacements, arrayReplacements, objectReplacements, defaultSR, defaultAR, defaultOR)
+	}
+	paramSR, paramAR, paramOR := replacementsFromParams(tr.Spec.Params)
+	stringReplacements, arrayReplacements, objectReplacements = extendReplacements(stringReplacements, arrayReplacements, objectReplacements, paramSR, paramAR, paramOR)
+	step.Ref.Params = step.Ref.Params.ReplaceVariables(stringReplacements, arrayReplacements, objectReplacements)
+}
+
+func extendReplacements(stringReplacements map[string]string, arrayReplacements map[string][]string, objectReplacements map[string]map[string]string, stringReplacementsToAdd map[string]string, arrayReplacementsToAdd map[string][]string, objectReplacementsToAdd map[string]map[string]string) (map[string]string, map[string][]string, map[string]map[string]string) {
+	for k, v := range stringReplacementsToAdd {
+		stringReplacements[k] = v
+	}
+	for k, v := range arrayReplacementsToAdd {
+		arrayReplacements[k] = v
+	}
+	objectReplacements = extendObjectReplacements(objectReplacements, objectReplacementsToAdd)
+	return stringReplacements, arrayReplacements, objectReplacements
+}
+
+func extendObjectReplacements(objectReplacements map[string]map[string]string, objectReplacementsToAdd map[string]map[string]string) map[string]map[string]string {
+	for k, v := range objectReplacementsToAdd {
+		for key, val := range v {
+			if objectReplacements != nil {
+				if objectReplacements[k] != nil {
+					objectReplacements[k][key] = val
+				} else {
+					objectReplacements[k] = v
+				}
+			}
+		}
+	}
+	return objectReplacements
+}
+
 // resolveTask accepts an impl of remote.Resolver and attempts to
 // fetch a task with given name and verify the v1beta1 task if trusted resources is enabled.
 // An error is returned if the remoteresource doesn't work
@@ -142,6 +206,21 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name, namespace 
 	return taskObj, refSource, vr, nil
 }
 
+func resolveStepAction(ctx context.Context, resolver remote.Resolver, name, namespace string, k8s kubernetes.Interface, tekton clientset.Interface) (*v1alpha1.StepAction, *v1.RefSource, error) {
+	obj, refSource, err := resolver.Get(ctx, "StepAction", name)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch obj := obj.(type) { //nolint:gocritic
+	case *v1alpha1.StepAction:
+		if err := apiserver.DryRunValidate(ctx, namespace, obj, tekton); err != nil {
+			return nil, nil, err
+		}
+		return obj, refSource, nil
+	}
+	return nil, nil, errors.New("resource is not a StepAction")
+}
+
 // readRuntimeObjectAsTask tries to convert a generic runtime.Object
 // into a *v1.Task type so that its meta and spec fields
 // can be read. v1beta1 object will be converted to v1 and returned.
@@ -154,6 +233,7 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name, namespace 
 func readRuntimeObjectAsTask(ctx context.Context, namespace string, obj runtime.Object, k8s kubernetes.Interface, tekton clientset.Interface, refSource *v1.RefSource, verificationPolicies []*v1alpha1.VerificationPolicy) (*v1.Task, *trustedresources.VerificationResult, error) {
 	switch obj := obj.(type) {
 	case *v1beta1.Task:
+		obj.SetDefaults(ctx)
 		// Verify the Task once we fetch from the remote resolution, mutating, validation and conversion of the task should happen after the verification, since signatures are based on the remote task contents
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
@@ -172,6 +252,7 @@ func readRuntimeObjectAsTask(ctx context.Context, namespace string, obj runtime.
 		}
 		return t, &vr, nil
 	case *v1beta1.ClusterTask:
+		obj.SetDefaults(ctx)
 		t, err := convertClusterTaskToTask(ctx, *obj)
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
 		// without actually creating the Task on the cluster
@@ -180,6 +261,9 @@ func readRuntimeObjectAsTask(ctx context.Context, namespace string, obj runtime.
 		}
 		return t, nil, err
 	case *v1.Task:
+		// This SetDefaults is currently not necessary, but for consistency, it is recommended to add it.
+		// Avoid forgetting to add it in the future when there is a v2 version, causing similar problems.
+		obj.SetDefaults(ctx)
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
 		// without actually creating the Task on the cluster
@@ -222,8 +306,28 @@ func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (*v1.Ta
 	return task, nil, nil, nil
 }
 
-// IsGetTaskErrTransient returns true if an error returned by GetTask is retryable.
-func IsGetTaskErrTransient(err error) bool {
+// LocalStepActionRefResolver uses the current cluster to resolve a StepAction reference.
+type LocalStepActionRefResolver struct {
+	Namespace    string
+	Tektonclient clientset.Interface
+}
+
+// GetStepAction will resolve a StepAction from the local cluster using a versioned Tekton client.
+// It will return an error if it can't find an appropriate StepAction for any reason.
+func (l *LocalStepActionRefResolver) GetStepAction(ctx context.Context, name string) (*v1alpha1.StepAction, *v1.RefSource, error) {
+	// If we are going to resolve this reference locally, we need a namespace scope.
+	if l.Namespace == "" {
+		return nil, nil, fmt.Errorf("must specify namespace to resolve reference to step action %s", name)
+	}
+	stepAction, err := l.Tektonclient.TektonV1alpha1().StepActions(l.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return stepAction, nil, nil
+}
+
+// IsErrTransient returns true if an error returned by GetTask/GetStepAction is retryable.
+func IsErrTransient(err error) bool {
 	return strings.Contains(err.Error(), errEtcdLeaderChange)
 }
 
@@ -237,10 +341,12 @@ func convertClusterTaskToTask(ctx context.Context, ct v1beta1.ClusterTask) (*v1.
 			Kind:       "Task",
 			APIVersion: "tekton.dev/v1beta1",
 		},
+		// We need to keep ObjectMeta to keep consistent with the existing Task logic.
+		// TaskRun will inherit the original Annotations and Labels information.
+		ObjectMeta: ct.ObjectMeta,
 	}
 
 	t.Spec = ct.Spec
-	t.ObjectMeta.Name = ct.ObjectMeta.Name
 
 	v1Task := &v1.Task{
 		TypeMeta: metav1.TypeMeta{

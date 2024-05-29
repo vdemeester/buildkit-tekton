@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
@@ -61,7 +60,7 @@ func MergeStepsWithStepTemplate(template *StepTemplate, steps []Step) ([]Step, e
 		amendConflictingContainerFields(&merged, s)
 
 		// Pass through original step Script, for later conversion.
-		newStep := Step{Script: s.Script, OnError: s.OnError, Timeout: s.Timeout, StdoutConfig: s.StdoutConfig, StderrConfig: s.StderrConfig}
+		newStep := Step{Script: s.Script, OnError: s.OnError, Timeout: s.Timeout, StdoutConfig: s.StdoutConfig, StderrConfig: s.StderrConfig, Results: s.Results, Params: s.Params, Ref: s.Ref}
 		newStep.SetContainerFields(merged)
 		steps[i] = newStep
 	}
@@ -77,11 +76,12 @@ func MergeStepsWithSpecs(steps []Step, overrides []TaskRunStepSpec) ([]Step, err
 		stepNameToOverride[o.Name] = o
 	}
 	for i, s := range steps {
+		s := s
 		o, found := stepNameToOverride[s.Name]
 		if !found {
 			continue
 		}
-		merged := v1.ResourceRequirements{}
+		merged := corev1.ResourceRequirements{}
 		err := mergeObjWithTemplate(&s.ComputeResources, &o.ComputeResources, &merged)
 		if err != nil {
 			return nil, err
@@ -103,11 +103,12 @@ func MergeSidecarsWithSpecs(sidecars []Sidecar, overrides []TaskRunSidecarSpec) 
 		sidecarNameToOverride[o.Name] = o
 	}
 	for i, s := range sidecars {
+		s := s
 		o, found := sidecarNameToOverride[s.Name]
 		if !found {
 			continue
 		}
-		merged := v1.ResourceRequirements{}
+		merged := corev1.ResourceRequirements{}
 		err := mergeObjWithTemplate(&s.ComputeResources, &o.ComputeResources, &merged)
 		if err != nil {
 			return nil, err

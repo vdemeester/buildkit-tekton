@@ -4,14 +4,9 @@ package kms
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
-	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"time"
@@ -22,42 +17,62 @@ import (
 // operation is successful, the key state of the KMS key changes to PendingDeletion
 // and the key can't be used in any cryptographic operations. It remains in this
 // state for the duration of the waiting period. Before the waiting period ends,
-// you can use CancelKeyDeletion to cancel the deletion of the KMS key. After the
-// waiting period ends, KMS deletes the KMS key, its key material, and all KMS data
-// associated with it, including all aliases that refer to it. Deleting a KMS key
-// is a destructive and potentially dangerous operation. When a KMS key is deleted,
-// all data that was encrypted under the KMS key is unrecoverable. (The only
-// exception is a multi-Region replica key , or an asymmetric or HMAC KMS key with
-// imported key material .) To prevent the use of a KMS key without deleting it,
-// use DisableKey . You can schedule the deletion of a multi-Region primary key and
-// its replica keys at any time. However, KMS will not delete a multi-Region
-// primary key with existing replica keys. If you schedule the deletion of a
-// primary key with replicas, its key state changes to PendingReplicaDeletion and
-// it cannot be replicated or used in cryptographic operations. This status can
-// continue indefinitely. When the last of its replicas keys is deleted (not just
+// you can use CancelKeyDeletionto cancel the deletion of the KMS key. After the waiting period
+// ends, KMS deletes the KMS key, its key material, and all KMS data associated
+// with it, including all aliases that refer to it.
+//
+// Deleting a KMS key is a destructive and potentially dangerous operation. When a
+// KMS key is deleted, all data that was encrypted under the KMS key is
+// unrecoverable. (The only exception is a [multi-Region replica key], or an asymmetric or HMAC KMS key with imported key material.) To prevent the use of a KMS
+// key without deleting it, use DisableKey.
+//
+// You can schedule the deletion of a multi-Region primary key and its replica
+// keys at any time. However, KMS will not delete a multi-Region primary key with
+// existing replica keys. If you schedule the deletion of a primary key with
+// replicas, its key state changes to PendingReplicaDeletion and it cannot be
+// replicated or used in cryptographic operations. This status can continue
+// indefinitely. When the last of its replicas keys is deleted (not just
 // scheduled), the key state of the primary key changes to PendingDeletion and its
-// waiting period ( PendingWindowInDays ) begins. For details, see Deleting
-// multi-Region keys (https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-delete.html)
-// in the Key Management Service Developer Guide. When KMS deletes a KMS key from
-// an CloudHSM key store (https://docs.aws.amazon.com/kms/latest/developerguide/delete-cmk-keystore.html)
-// , it makes a best effort to delete the associated key material from the
-// associated CloudHSM cluster. However, you might need to manually delete the
-// orphaned key material (https://docs.aws.amazon.com/kms/latest/developerguide/fix-keystore.html#fix-keystore-orphaned-key)
-// from the cluster and its backups. Deleting a KMS key from an external key store (https://docs.aws.amazon.com/kms/latest/developerguide/delete-xks-key.html)
-// has no effect on the associated external key. However, for both types of custom
-// key stores, deleting a KMS key is destructive and irreversible. You cannot
-// decrypt ciphertext encrypted under the KMS key by using only its associated
-// external key or CloudHSM key. Also, you cannot recreate a KMS key in an external
-// key store by creating a new KMS key with the same key material. For more
-// information about scheduling a KMS key for deletion, see Deleting KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html)
-// in the Key Management Service Developer Guide. The KMS key that you use for this
-// operation must be in a compatible key state. For details, see Key states of KMS
-// keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html) in
-// the Key Management Service Developer Guide. Cross-account use: No. You cannot
-// perform this operation on a KMS key in a different Amazon Web Services account.
-// Required permissions: kms:ScheduleKeyDeletion (key policy) Related operations
-//   - CancelKeyDeletion
-//   - DisableKey
+// waiting period ( PendingWindowInDays ) begins. For details, see [Deleting multi-Region keys] in the Key
+// Management Service Developer Guide.
+//
+// When KMS [deletes a KMS key from an CloudHSM key store], it makes a best effort to delete the associated key material from
+// the associated CloudHSM cluster. However, you might need to manually [delete the orphaned key material]from the
+// cluster and its backups. [Deleting a KMS key from an external key store]has no effect on the associated external key. However,
+// for both types of custom key stores, deleting a KMS key is destructive and
+// irreversible. You cannot decrypt ciphertext encrypted under the KMS key by using
+// only its associated external key or CloudHSM key. Also, you cannot recreate a
+// KMS key in an external key store by creating a new KMS key with the same key
+// material.
+//
+// For more information about scheduling a KMS key for deletion, see [Deleting KMS keys] in the Key
+// Management Service Developer Guide.
+//
+// The KMS key that you use for this operation must be in a compatible key state.
+// For details, see [Key states of KMS keys]in the Key Management Service Developer Guide.
+//
+// Cross-account use: No. You cannot perform this operation on a KMS key in a
+// different Amazon Web Services account.
+//
+// Required permissions: kms:ScheduleKeyDeletion (key policy)
+//
+// # Related operations
+//
+// # CancelKeyDeletion
+//
+// # DisableKey
+//
+// Eventual consistency: The KMS API follows an eventual consistency model. For
+// more information, see [KMS eventual consistency].
+//
+// [delete the orphaned key material]: https://docs.aws.amazon.com/kms/latest/developerguide/fix-keystore.html#fix-keystore-orphaned-key
+// [Key states of KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html
+// [Deleting a KMS key from an external key store]: https://docs.aws.amazon.com/kms/latest/developerguide/delete-xks-key.html
+// [Deleting multi-Region keys]: https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-delete.html
+// [Deleting KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html
+// [multi-Region replica key]: https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-delete.html
+// [KMS eventual consistency]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-eventual-consistency.html
+// [deletes a KMS key from an CloudHSM key store]: https://docs.aws.amazon.com/kms/latest/developerguide/delete-cmk-keystore.html
 func (c *Client) ScheduleKeyDeletion(ctx context.Context, params *ScheduleKeyDeletionInput, optFns ...func(*Options)) (*ScheduleKeyDeletionOutput, error) {
 	if params == nil {
 		params = &ScheduleKeyDeletionInput{}
@@ -75,25 +90,35 @@ func (c *Client) ScheduleKeyDeletion(ctx context.Context, params *ScheduleKeyDel
 
 type ScheduleKeyDeletionInput struct {
 
-	// The unique identifier of the KMS key to delete. Specify the key ID or key ARN
-	// of the KMS key. For example:
+	// The unique identifier of the KMS key to delete.
+	//
+	// Specify the key ID or key ARN of the KMS key.
+	//
+	// For example:
+	//
 	//   - Key ID: 1234abcd-12ab-34cd-56ef-1234567890ab
+	//
 	//   - Key ARN:
 	//   arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
-	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey .
+	//
+	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey.
 	//
 	// This member is required.
 	KeyId *string
 
 	// The waiting period, specified in number of days. After the waiting period ends,
-	// KMS deletes the KMS key. If the KMS key is a multi-Region primary key with
-	// replica keys, the waiting period begins when the last of its replica keys is
-	// deleted. Otherwise, the waiting period begins immediately. This value is
-	// optional. If you include a value, it must be between 7 and 30, inclusive. If you
-	// do not include a value, it defaults to 30. You can use the
-	// kms:ScheduleKeyDeletionPendingWindowInDays (https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-schedule-key-deletion-pending-window-in-days)
-	// condition key to further constrain the values that principals can specify in the
-	// PendingWindowInDays parameter.
+	// KMS deletes the KMS key.
+	//
+	// If the KMS key is a multi-Region primary key with replica keys, the waiting
+	// period begins when the last of its replica keys is deleted. Otherwise, the
+	// waiting period begins immediately.
+	//
+	// This value is optional. If you include a value, it must be between 7 and 30,
+	// inclusive. If you do not include a value, it defaults to 30. You can use the [kms:ScheduleKeyDeletionPendingWindowInDays]
+	// kms:ScheduleKeyDeletionPendingWindowInDays condition key to further constrain
+	// the values that principals can specify in the PendingWindowInDays parameter.
+	//
+	// [kms:ScheduleKeyDeletionPendingWindowInDays]: https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-schedule-key-deletion-pending-window-in-days
 	PendingWindowInDays *int32
 
 	noSmithyDocumentSerde
@@ -101,25 +126,31 @@ type ScheduleKeyDeletionInput struct {
 
 type ScheduleKeyDeletionOutput struct {
 
-	// The date and time after which KMS deletes the KMS key. If the KMS key is a
-	// multi-Region primary key with replica keys, this field does not appear. The
-	// deletion date for the primary key isn't known until its last replica key is
-	// deleted.
+	// The date and time after which KMS deletes the KMS key.
+	//
+	// If the KMS key is a multi-Region primary key with replica keys, this field does
+	// not appear. The deletion date for the primary key isn't known until its last
+	// replica key is deleted.
 	DeletionDate *time.Time
 
-	// The Amazon Resource Name ( key ARN (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN)
-	// ) of the KMS key whose deletion is scheduled.
+	// The Amazon Resource Name ([key ARN] ) of the KMS key whose deletion is scheduled.
+	//
+	// [key ARN]: https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN
 	KeyId *string
 
-	// The current status of the KMS key. For more information about how key state
-	// affects the use of a KMS key, see Key states of KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html)
-	// in the Key Management Service Developer Guide.
+	// The current status of the KMS key.
+	//
+	// For more information about how key state affects the use of a KMS key, see [Key states of KMS keys] in
+	// the Key Management Service Developer Guide.
+	//
+	// [Key states of KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html
 	KeyState types.KeyState
 
-	// The waiting period before the KMS key is deleted. If the KMS key is a
-	// multi-Region primary key with replicas, the waiting period begins when the last
-	// of its replica keys is deleted. Otherwise, the waiting period begins
-	// immediately.
+	// The waiting period before the KMS key is deleted.
+	//
+	// If the KMS key is a multi-Region primary key with replicas, the waiting period
+	// begins when the last of its replica keys is deleted. Otherwise, the waiting
+	// period begins immediately.
 	PendingWindowInDays *int32
 
 	// Metadata pertaining to the operation's result.
@@ -129,6 +160,9 @@ type ScheduleKeyDeletionOutput struct {
 }
 
 func (c *Client) addOperationScheduleKeyDeletionMiddlewares(stack *middleware.Stack, options Options) (err error) {
+	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
+		return err
+	}
 	err = stack.Serialize.Add(&awsAwsjson11_serializeOpScheduleKeyDeletion{}, middleware.After)
 	if err != nil {
 		return err
@@ -137,34 +171,35 @@ func (c *Client) addOperationScheduleKeyDeletionMiddlewares(stack *middleware.St
 	if err != nil {
 		return err
 	}
+	if err := addProtocolFinalizerMiddlewares(stack, options, "ScheduleKeyDeletion"); err != nil {
+		return fmt.Errorf("add protocol finalizers: %v", err)
+	}
+
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddClientRequestIDMiddleware(stack); err != nil {
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
-	if err = smithyhttp.AddComputeContentLengthMiddleware(stack); err != nil {
+	if err = addComputeContentLength(stack); err != nil {
 		return err
 	}
 	if err = addResolveEndpointMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = v4.AddComputePayloadSHA256Middleware(stack); err != nil {
+	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetryMiddlewares(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
 		return err
 	}
-	if err = addHTTPSignerV4Middleware(stack, options); err != nil {
+	if err = addRawResponseToMetadata(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRawResponseToMetadata(stack); err != nil {
-		return err
-	}
-	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
+	if err = addRecordResponseTiming(stack); err != nil {
 		return err
 	}
 	if err = addClientUserAgent(stack, options); err != nil {
@@ -176,7 +211,7 @@ func (c *Client) addOperationScheduleKeyDeletionMiddlewares(stack *middleware.St
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
-	if err = addScheduleKeyDeletionResolveEndpointMiddleware(stack, options); err != nil {
+	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
 		return err
 	}
 	if err = addOpScheduleKeyDeletionValidationMiddleware(stack); err != nil {
@@ -185,7 +220,7 @@ func (c *Client) addOperationScheduleKeyDeletionMiddlewares(stack *middleware.St
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opScheduleKeyDeletion(options.Region), middleware.Before); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -197,7 +232,7 @@ func (c *Client) addOperationScheduleKeyDeletionMiddlewares(stack *middleware.St
 	if err = addRequestResponseLogging(stack, options); err != nil {
 		return err
 	}
-	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
+	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -207,130 +242,6 @@ func newServiceMetadataMiddleware_opScheduleKeyDeletion(region string) *awsmiddl
 	return &awsmiddleware.RegisterServiceMetadata{
 		Region:        region,
 		ServiceID:     ServiceID,
-		SigningName:   "kms",
 		OperationName: "ScheduleKeyDeletion",
 	}
-}
-
-type opScheduleKeyDeletionResolveEndpointMiddleware struct {
-	EndpointResolver EndpointResolverV2
-	BuiltInResolver  builtInParameterResolver
-}
-
-func (*opScheduleKeyDeletionResolveEndpointMiddleware) ID() string {
-	return "ResolveEndpointV2"
-}
-
-func (m *opScheduleKeyDeletionResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
-	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
-) {
-	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
-		return next.HandleSerialize(ctx, in)
-	}
-
-	req, ok := in.Request.(*smithyhttp.Request)
-	if !ok {
-		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
-	}
-
-	if m.EndpointResolver == nil {
-		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
-	}
-
-	params := EndpointParameters{}
-
-	m.BuiltInResolver.ResolveBuiltIns(&params)
-
-	var resolvedEndpoint smithyendpoints.Endpoint
-	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
-	if err != nil {
-		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
-	}
-
-	req.URL = &resolvedEndpoint.URI
-
-	for k := range resolvedEndpoint.Headers {
-		req.Header.Set(
-			k,
-			resolvedEndpoint.Headers.Get(k),
-		)
-	}
-
-	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
-	if err != nil {
-		var nfe *internalauth.NoAuthenticationSchemesFoundError
-		if errors.As(err, &nfe) {
-			// if no auth scheme is found, default to sigv4
-			signingName := "kms"
-			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-
-		}
-		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
-		if errors.As(err, &ue) {
-			return out, metadata, fmt.Errorf(
-				"This operation requests signer version(s) %v but the client only supports %v",
-				ue.UnsupportedSchemes,
-				internalauth.SupportedSchemes,
-			)
-		}
-	}
-
-	for _, authScheme := range authSchemes {
-		switch authScheme.(type) {
-		case *internalauth.AuthenticationSchemeV4:
-			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
-			var signingName, signingRegion string
-			if v4Scheme.SigningName == nil {
-				signingName = "kms"
-			} else {
-				signingName = *v4Scheme.SigningName
-			}
-			if v4Scheme.SigningRegion == nil {
-				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
-			} else {
-				signingRegion = *v4Scheme.SigningRegion
-			}
-			if v4Scheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-			break
-		case *internalauth.AuthenticationSchemeV4A:
-			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
-			if v4aScheme.SigningName == nil {
-				v4aScheme.SigningName = aws.String("kms")
-			}
-			if v4aScheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
-			break
-		case *internalauth.AuthenticationSchemeNone:
-			break
-		}
-	}
-
-	return next.HandleSerialize(ctx, in)
-}
-
-func addScheduleKeyDeletionResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
-	return stack.Serialize.Insert(&opScheduleKeyDeletionResolveEndpointMiddleware{
-		EndpointResolver: options.EndpointResolverV2,
-		BuiltInResolver: &builtInResolver{
-			Region:       options.Region,
-			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
-			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
-			Endpoint:     options.BaseEndpoint,
-		},
-	}, "ResolveEndpoint", middleware.After)
 }

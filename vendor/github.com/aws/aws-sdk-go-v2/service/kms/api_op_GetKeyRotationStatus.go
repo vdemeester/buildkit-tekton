@@ -4,41 +4,39 @@ package kms
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
-	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"time"
 )
 
-// Gets a Boolean value that indicates whether automatic rotation of the key
-// material (https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html)
-// is enabled for the specified KMS key. When you enable automatic rotation for
-// customer managed KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#customer-cmk)
-// , KMS rotates the key material of the KMS key one year (approximately 365 days)
-// from the enable date and every year thereafter. You can monitor rotation of the
-// key material for your KMS keys in CloudTrail and Amazon CloudWatch. Automatic
-// key rotation is supported only on symmetric encryption KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#symmetric-cmks)
-// . You cannot enable automatic rotation of asymmetric KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/symmetric-asymmetric.html)
-// , HMAC KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/hmac.html)
-// , KMS keys with imported key material (https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys.html)
-// , or KMS keys in a custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
-// . To enable or disable automatic rotation of a set of related multi-Region keys (https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-manage.html#multi-region-rotate)
-// , set the property on the primary key.. You can enable ( EnableKeyRotation ) and
-// disable automatic rotation ( DisableKeyRotation ) of the key material in
-// customer managed KMS keys. Key material rotation of Amazon Web Services managed
-// KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk)
-// is not configurable. KMS always rotates the key material in Amazon Web Services
-// managed KMS keys every year. The key rotation status for Amazon Web Services
-// managed KMS keys is always true . In May 2022, KMS changed the rotation schedule
-// for Amazon Web Services managed keys from every three years to every year. For
-// details, see EnableKeyRotation . The KMS key that you use for this operation
-// must be in a compatible key state. For details, see Key states of KMS keys (https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html)
-// in the Key Management Service Developer Guide.
+// Provides detailed information about the rotation status for a KMS key,
+// including whether [automatic rotation of the key material]is enabled for the specified KMS key, the [rotation period], and the next
+// scheduled rotation date.
+//
+// Automatic key rotation is supported only on [symmetric encryption KMS keys]. You cannot enable automatic
+// rotation of [asymmetric KMS keys], [HMAC KMS keys], KMS keys with [imported key material], or KMS keys in a [custom key store]. To enable or disable
+// automatic rotation of a set of related [multi-Region keys], set the property on the primary key..
+//
+// You can enable (EnableKeyRotation ) and disable automatic rotation (DisableKeyRotation ) of the key material in
+// customer managed KMS keys. Key material rotation of [Amazon Web Services managed KMS keys]is not configurable. KMS
+// always rotates the key material in Amazon Web Services managed KMS keys every
+// year. The key rotation status for Amazon Web Services managed KMS keys is always
+// true .
+//
+// You can perform on-demand (RotateKeyOnDemand ) rotation of the key material in customer managed
+// KMS keys, regardless of whether or not automatic key rotation is enabled. You
+// can use GetKeyRotationStatus to identify the date and time that an in progress
+// on-demand rotation was initiated. You can use ListKeyRotationsto view the details of completed
+// rotations.
+//
+// In May 2022, KMS changed the rotation schedule for Amazon Web Services managed
+// keys from every three years to every year. For details, see EnableKeyRotation.
+//
+// The KMS key that you use for this operation must be in a compatible key state.
+// For details, see [Key states of KMS keys]in the Key Management Service Developer Guide.
+//
 //   - Disabled: The key rotation status does not change when you disable a KMS
 //     key. However, while the KMS key is disabled, KMS does not rotate the key
 //     material. When you re-enable the KMS key, rotation resumes. If the key material
@@ -46,16 +44,42 @@ import (
 //     immediately, and every year thereafter. If it's been less than a year since the
 //     key material in the re-enabled KMS key was rotated, the KMS key resumes its
 //     prior rotation schedule.
+//
 //   - Pending deletion: While a KMS key is pending deletion, its key rotation
 //     status is false and KMS does not rotate the key material. If you cancel the
 //     deletion, the original key rotation status returns to true .
 //
 // Cross-account use: Yes. To perform this operation on a KMS key in a different
 // Amazon Web Services account, specify the key ARN in the value of the KeyId
-// parameter. Required permissions: kms:GetKeyRotationStatus (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
-// (key policy) Related operations:
-//   - DisableKeyRotation
-//   - EnableKeyRotation
+// parameter.
+//
+// Required permissions: [kms:GetKeyRotationStatus] (key policy)
+//
+// Related operations:
+//
+// # DisableKeyRotation
+//
+// # EnableKeyRotation
+//
+// # ListKeyRotations
+//
+// # RotateKeyOnDemand
+//
+// Eventual consistency: The KMS API follows an eventual consistency model. For
+// more information, see [KMS eventual consistency].
+//
+// [imported key material]: https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys.html
+// [Key states of KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html
+// [HMAC KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/hmac.html
+// [rotation period]: https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html#rotation-period
+// [Amazon Web Services managed KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#aws-managed-cmk
+// [kms:GetKeyRotationStatus]: https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html
+// [automatic rotation of the key material]: https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html
+// [asymmetric KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/symmetric-asymmetric.html
+// [symmetric encryption KMS keys]: https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#symmetric-cmks
+// [multi-Region keys]: https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-manage.html#multi-region-rotate
+// [KMS eventual consistency]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-eventual-consistency.html
+// [custom key store]: https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html
 func (c *Client) GetKeyRotationStatus(ctx context.Context, params *GetKeyRotationStatusInput, optFns ...func(*Options)) (*GetKeyRotationStatusOutput, error) {
 	if params == nil {
 		params = &GetKeyRotationStatusInput{}
@@ -73,13 +97,19 @@ func (c *Client) GetKeyRotationStatus(ctx context.Context, params *GetKeyRotatio
 
 type GetKeyRotationStatusInput struct {
 
-	// Gets the rotation status for the specified KMS key. Specify the key ID or key
-	// ARN of the KMS key. To specify a KMS key in a different Amazon Web Services
-	// account, you must use the key ARN. For example:
+	// Gets the rotation status for the specified KMS key.
+	//
+	// Specify the key ID or key ARN of the KMS key. To specify a KMS key in a
+	// different Amazon Web Services account, you must use the key ARN.
+	//
+	// For example:
+	//
 	//   - Key ID: 1234abcd-12ab-34cd-56ef-1234567890ab
+	//
 	//   - Key ARN:
 	//   arn:aws:kms:us-east-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab
-	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey .
+	//
+	// To get the key ID and key ARN for a KMS key, use ListKeys or DescribeKey.
 	//
 	// This member is required.
 	KeyId *string
@@ -89,8 +119,29 @@ type GetKeyRotationStatusInput struct {
 
 type GetKeyRotationStatusOutput struct {
 
+	// Identifies the specified symmetric encryption KMS key.
+	KeyId *string
+
 	// A Boolean value that specifies whether key rotation is enabled.
 	KeyRotationEnabled bool
+
+	// The next date that KMS will automatically rotate the key material.
+	NextRotationDate *time.Time
+
+	// Identifies the date and time that an in progress on-demand rotation was
+	// initiated.
+	//
+	// The KMS API follows an [eventual consistency] model due to the distributed nature of the system. As a
+	// result, there might be a slight delay between initiating on-demand key rotation
+	// and the rotation's completion. Once the on-demand rotation is complete, use ListKeyRotationsto
+	// view the details of the on-demand rotation.
+	//
+	// [eventual consistency]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-eventual-consistency.html
+	OnDemandRotationStartDate *time.Time
+
+	// The number of days between each automatic rotation. The default value is 365
+	// days.
+	RotationPeriodInDays *int32
 
 	// Metadata pertaining to the operation's result.
 	ResultMetadata middleware.Metadata
@@ -99,6 +150,9 @@ type GetKeyRotationStatusOutput struct {
 }
 
 func (c *Client) addOperationGetKeyRotationStatusMiddlewares(stack *middleware.Stack, options Options) (err error) {
+	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
+		return err
+	}
 	err = stack.Serialize.Add(&awsAwsjson11_serializeOpGetKeyRotationStatus{}, middleware.After)
 	if err != nil {
 		return err
@@ -107,34 +161,35 @@ func (c *Client) addOperationGetKeyRotationStatusMiddlewares(stack *middleware.S
 	if err != nil {
 		return err
 	}
+	if err := addProtocolFinalizerMiddlewares(stack, options, "GetKeyRotationStatus"); err != nil {
+		return fmt.Errorf("add protocol finalizers: %v", err)
+	}
+
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddClientRequestIDMiddleware(stack); err != nil {
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
-	if err = smithyhttp.AddComputeContentLengthMiddleware(stack); err != nil {
+	if err = addComputeContentLength(stack); err != nil {
 		return err
 	}
 	if err = addResolveEndpointMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = v4.AddComputePayloadSHA256Middleware(stack); err != nil {
+	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetryMiddlewares(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
 		return err
 	}
-	if err = addHTTPSignerV4Middleware(stack, options); err != nil {
+	if err = addRawResponseToMetadata(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRawResponseToMetadata(stack); err != nil {
-		return err
-	}
-	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
+	if err = addRecordResponseTiming(stack); err != nil {
 		return err
 	}
 	if err = addClientUserAgent(stack, options); err != nil {
@@ -146,7 +201,7 @@ func (c *Client) addOperationGetKeyRotationStatusMiddlewares(stack *middleware.S
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
-	if err = addGetKeyRotationStatusResolveEndpointMiddleware(stack, options); err != nil {
+	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
 		return err
 	}
 	if err = addOpGetKeyRotationStatusValidationMiddleware(stack); err != nil {
@@ -155,7 +210,7 @@ func (c *Client) addOperationGetKeyRotationStatusMiddlewares(stack *middleware.S
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opGetKeyRotationStatus(options.Region), middleware.Before); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -167,7 +222,7 @@ func (c *Client) addOperationGetKeyRotationStatusMiddlewares(stack *middleware.S
 	if err = addRequestResponseLogging(stack, options); err != nil {
 		return err
 	}
-	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
+	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -177,130 +232,6 @@ func newServiceMetadataMiddleware_opGetKeyRotationStatus(region string) *awsmidd
 	return &awsmiddleware.RegisterServiceMetadata{
 		Region:        region,
 		ServiceID:     ServiceID,
-		SigningName:   "kms",
 		OperationName: "GetKeyRotationStatus",
 	}
-}
-
-type opGetKeyRotationStatusResolveEndpointMiddleware struct {
-	EndpointResolver EndpointResolverV2
-	BuiltInResolver  builtInParameterResolver
-}
-
-func (*opGetKeyRotationStatusResolveEndpointMiddleware) ID() string {
-	return "ResolveEndpointV2"
-}
-
-func (m *opGetKeyRotationStatusResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
-	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
-) {
-	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
-		return next.HandleSerialize(ctx, in)
-	}
-
-	req, ok := in.Request.(*smithyhttp.Request)
-	if !ok {
-		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
-	}
-
-	if m.EndpointResolver == nil {
-		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
-	}
-
-	params := EndpointParameters{}
-
-	m.BuiltInResolver.ResolveBuiltIns(&params)
-
-	var resolvedEndpoint smithyendpoints.Endpoint
-	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
-	if err != nil {
-		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
-	}
-
-	req.URL = &resolvedEndpoint.URI
-
-	for k := range resolvedEndpoint.Headers {
-		req.Header.Set(
-			k,
-			resolvedEndpoint.Headers.Get(k),
-		)
-	}
-
-	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
-	if err != nil {
-		var nfe *internalauth.NoAuthenticationSchemesFoundError
-		if errors.As(err, &nfe) {
-			// if no auth scheme is found, default to sigv4
-			signingName := "kms"
-			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-
-		}
-		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
-		if errors.As(err, &ue) {
-			return out, metadata, fmt.Errorf(
-				"This operation requests signer version(s) %v but the client only supports %v",
-				ue.UnsupportedSchemes,
-				internalauth.SupportedSchemes,
-			)
-		}
-	}
-
-	for _, authScheme := range authSchemes {
-		switch authScheme.(type) {
-		case *internalauth.AuthenticationSchemeV4:
-			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
-			var signingName, signingRegion string
-			if v4Scheme.SigningName == nil {
-				signingName = "kms"
-			} else {
-				signingName = *v4Scheme.SigningName
-			}
-			if v4Scheme.SigningRegion == nil {
-				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
-			} else {
-				signingRegion = *v4Scheme.SigningRegion
-			}
-			if v4Scheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-			break
-		case *internalauth.AuthenticationSchemeV4A:
-			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
-			if v4aScheme.SigningName == nil {
-				v4aScheme.SigningName = aws.String("kms")
-			}
-			if v4aScheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
-			break
-		case *internalauth.AuthenticationSchemeNone:
-			break
-		}
-	}
-
-	return next.HandleSerialize(ctx, in)
-}
-
-func addGetKeyRotationStatusResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
-	return stack.Serialize.Insert(&opGetKeyRotationStatusResolveEndpointMiddleware{
-		EndpointResolver: options.EndpointResolverV2,
-		BuiltInResolver: &builtInResolver{
-			Region:       options.Region,
-			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
-			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
-			Endpoint:     options.BaseEndpoint,
-		},
-	}, "ResolveEndpoint", middleware.After)
 }

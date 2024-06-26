@@ -19,10 +19,12 @@ package v1
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/validate"
+	"github.com/tektoncd/pipeline/pkg/internal/resultref"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipeline/dag"
 	"github.com/tektoncd/pipeline/pkg/substitution"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -33,8 +35,10 @@ import (
 	"knative.dev/pkg/webhook/resourcesemantics"
 )
 
-var _ apis.Validatable = (*Pipeline)(nil)
-var _ resourcesemantics.VerbLimited = (*Pipeline)(nil)
+var (
+	_ apis.Validatable              = (*Pipeline)(nil)
+	_ resourcesemantics.VerbLimited = (*Pipeline)(nil)
+)
 
 const (
 	taskRef      = "taskRef"
@@ -94,28 +98,6 @@ func (ps *PipelineSpec) Validate(ctx context.Context) (errs *apis.FieldError) {
 // have "enable-api-fields" set to "alpha" or "beta".
 func (ps *PipelineSpec) ValidateBetaFields(ctx context.Context) *apis.FieldError {
 	var errs *apis.FieldError
-	// Object parameters
-	for i, p := range ps.Params {
-		if p.Type == ParamTypeObject {
-			errs = errs.Also(config.ValidateEnabledAPIFields(ctx, "object type parameter", config.BetaAPIFields).ViaFieldIndex("params", i))
-		}
-	}
-	// Indexing into array parameters
-	arrayParamIndexingRefs := ps.GetIndexingReferencesToArrayParams()
-	if len(arrayParamIndexingRefs) != 0 {
-		errs = errs.Also(config.ValidateEnabledAPIFields(ctx, "indexing into array parameters", config.BetaAPIFields))
-	}
-	// array and object results
-	for i, result := range ps.Results {
-		switch result.Type {
-		case ResultsTypeObject:
-			errs = errs.Also(config.ValidateEnabledAPIFields(ctx, "object results", config.BetaAPIFields).ViaFieldIndex("results", i))
-		case ResultsTypeArray:
-			errs = errs.Also(config.ValidateEnabledAPIFields(ctx, "array results", config.BetaAPIFields).ViaFieldIndex("results", i))
-		case ResultsTypeString:
-		default:
-		}
-	}
 	for i, pt := range ps.Tasks {
 		errs = errs.Also(pt.validateBetaFields(ctx).ViaFieldIndex("tasks", i))
 	}
@@ -138,8 +120,6 @@ func (pt *PipelineTask) validateBetaFields(ctx context.Context) *apis.FieldError
 		if len(pt.TaskRef.Params) > 0 {
 			errs = errs.Also(config.ValidateEnabledAPIFields(ctx, "taskref.params", config.BetaAPIFields))
 		}
-	} else if pt.TaskSpec != nil {
-		errs = errs.Also(pt.TaskSpec.ValidateBetaFields(ctx))
 	}
 	return errs
 }
@@ -171,10 +151,10 @@ func (l PipelineTaskList) Validate(ctx context.Context, taskNames sets.String, p
 }
 
 // validateUsageOfDeclaredPipelineTaskParameters validates that all parameters referenced in the pipeline Task are declared by the pipeline Task.
-func (l PipelineTaskList) validateUsageOfDeclaredPipelineTaskParameters(ctx context.Context, path string) (errs *apis.FieldError) {
+func (l PipelineTaskList) validateUsageOfDeclaredPipelineTaskParameters(ctx context.Context, additionalParams []ParamSpec, path string) (errs *apis.FieldError) {
 	for i, t := range l {
 		if t.TaskSpec != nil {
-			errs = errs.Also(ValidateUsageOfDeclaredParameters(ctx, t.TaskSpec.Steps, t.TaskSpec.Params).ViaFieldIndex(path, i))
+			errs = errs.Also(ValidateUsageOfDeclaredParameters(ctx, t.TaskSpec.Steps, append(t.TaskSpec.Params, additionalParams...)).ViaFieldIndex(path, i))
 		}
 	}
 	return errs
@@ -197,6 +177,8 @@ func (pt PipelineTask) ValidateName() *apis.FieldError {
 // calls the validation routine based on the type of the task
 func (pt PipelineTask) Validate(ctx context.Context) (errs *apis.FieldError) {
 	errs = errs.Also(pt.validateRefOrSpec(ctx))
+
+	errs = errs.Also(pt.validateEnabledInlineSpec(ctx))
 
 	errs = errs.Also(pt.validateEmbeddedOrType())
 	// taskKinds contains the kinds when the apiVersion is not set, they are not custom tasks,
@@ -288,6 +270,24 @@ func (pt *PipelineTask) validateWorkspaces(workspaceNames sets.String) (errs *ap
 		}
 
 		workspaceBindingNames.Insert(ws.Name)
+	}
+	return errs
+}
+
+// validateEnabledInlineSpec validates that pipelineSpec or taskSpec is allowed by checking
+// disable-inline-spec field
+func (pt PipelineTask) validateEnabledInlineSpec(ctx context.Context) (errs *apis.FieldError) {
+	if pt.TaskSpec != nil {
+		if slices.Contains(strings.Split(
+			config.FromContextOrDefaults(ctx).FeatureFlags.DisableInlineSpec, ","), "pipeline") {
+			errs = errs.Also(apis.ErrDisallowedFields("taskSpec"))
+		}
+	}
+	if pt.PipelineSpec != nil {
+		if slices.Contains(strings.Split(
+			config.FromContextOrDefaults(ctx).FeatureFlags.DisableInlineSpec, ","), "pipeline") {
+			errs = errs.Also(apis.ErrDisallowedFields("pipelineSpec"))
+		}
 	}
 	return errs
 }
@@ -385,8 +385,8 @@ func validatePipelineWorkspacesDeclarations(wss []PipelineWorkspaceDeclaration) 
 
 // validatePipelineParameterUsage validates that parameters referenced in the Pipeline are declared by the Pipeline
 func (ps *PipelineSpec) validatePipelineParameterUsage(ctx context.Context) (errs *apis.FieldError) {
-	errs = errs.Also(PipelineTaskList(ps.Tasks).validateUsageOfDeclaredPipelineTaskParameters(ctx, "tasks"))
-	errs = errs.Also(PipelineTaskList(ps.Finally).validateUsageOfDeclaredPipelineTaskParameters(ctx, "finally"))
+	errs = errs.Also(PipelineTaskList(ps.Tasks).validateUsageOfDeclaredPipelineTaskParameters(ctx, ps.Params, "tasks"))
+	errs = errs.Also(PipelineTaskList(ps.Finally).validateUsageOfDeclaredPipelineTaskParameters(ctx, ps.Params, "finally"))
 	errs = errs.Also(validatePipelineTaskParameterUsage(ps.Tasks, ps.Params).ViaField("tasks"))
 	errs = errs.Also(validatePipelineTaskParameterUsage(ps.Finally, ps.Params).ViaField("finally"))
 	return errs
@@ -394,9 +394,9 @@ func (ps *PipelineSpec) validatePipelineParameterUsage(ctx context.Context) (err
 
 // validatePipelineTaskParameterUsage validates that parameters referenced in the Pipeline Tasks are declared by the Pipeline
 func validatePipelineTaskParameterUsage(tasks []PipelineTask, params ParamSpecs) (errs *apis.FieldError) {
-	allParamNames := sets.NewString(params.getNames()...)
-	_, arrayParams, objectParams := params.sortByType()
-	arrayParamNames := sets.NewString(arrayParams.getNames()...)
+	allParamNames := sets.NewString(params.GetNames()...)
+	_, arrayParams, objectParams := params.SortByType()
+	arrayParamNames := sets.NewString(arrayParams.GetNames()...)
 	objectParameterNameKeys := map[string][]string{}
 	for _, p := range objectParams {
 		for k := range p.Properties {
@@ -405,7 +405,7 @@ func validatePipelineTaskParameterUsage(tasks []PipelineTask, params ParamSpecs)
 	}
 	errs = errs.Also(validatePipelineParametersVariables(tasks, "params", allParamNames, arrayParamNames, objectParameterNameKeys))
 	for i, task := range tasks {
-		errs = errs.Also(task.Params.validateDuplicateParameters().ViaFieldIndex("params", i))
+		errs = errs.Also(task.Params.validateDuplicateParameters().ViaField("params").ViaIndex(i))
 	}
 	return errs
 }
@@ -433,16 +433,18 @@ func validatePipelineTasksWorkspacesUsage(wss []PipelineWorkspaceDeclaration, pt
 
 // ValidatePipelineParameterVariables validates parameters with those specified by each pipeline task,
 // (1) it validates the type of parameter is either string or array (2) parameter default value matches
-// with the type of that param
+// with the type of that param (3) no duplication, feature flag and allowed param type when using param enum
 func ValidatePipelineParameterVariables(ctx context.Context, tasks []PipelineTask, params ParamSpecs) (errs *apis.FieldError) {
 	// validates all the types within a slice of ParamSpecs
 	errs = errs.Also(ValidateParameterTypes(ctx, params).ViaField("params"))
-	errs = errs.Also(params.validateNoDuplicateNames())
+	errs = errs.Also(params.ValidateNoDuplicateNames())
+	errs = errs.Also(params.validateParamEnums(ctx).ViaField("params"))
 	for i, task := range tasks {
 		errs = errs.Also(task.Params.validateDuplicateParameters().ViaField("params").ViaIndex(i))
 	}
 	return errs
 }
+
 func validatePipelineParametersVariables(tasks []PipelineTask, prefix string, paramNames sets.String, arrayParamNames sets.String, objectParamNameKeys map[string][]string) (errs *apis.FieldError) {
 	for idx, task := range tasks {
 		errs = errs.Also(validatePipelineParametersVariablesInTaskParameters(task.Params, prefix, paramNames, arrayParamNames, objectParamNameKeys).ViaIndex(idx))
@@ -526,7 +528,7 @@ func validateExecutionStatusVariables(tasks []PipelineTask, finallyTasks []Pipel
 // dag tasks cannot have param value as $(tasks.pipelineTask.status)
 func validateExecutionStatusVariablesInTasks(tasks []PipelineTask) (errs *apis.FieldError) {
 	for idx, t := range tasks {
-		errs = errs.Also(t.validateExecutionStatusVariablesDisallowed()).ViaIndex(idx)
+		errs = errs.Also(t.validateExecutionStatusVariablesDisallowed().ViaIndex(idx))
 	}
 	return errs
 }
@@ -574,8 +576,8 @@ func (pt *PipelineTask) validateExecutionStatusVariablesAllowed(ptNames sets.Str
 
 func validateContainsExecutionStatusVariablesDisallowed(expressions []string, path string) (errs *apis.FieldError) {
 	if containsExecutionStatusReferences(expressions) {
-		errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("pipeline tasks can not refer to execution status"+
-			" of any other pipeline task or aggregate status of tasks"), path))
+		errs = errs.Also(apis.ErrInvalidValue("pipeline tasks can not refer to execution status"+
+			" of any other pipeline task or aggregate status of tasks", path))
 	}
 	return errs
 }
@@ -615,6 +617,7 @@ func validateExecutionStatusVariablesExpressions(expressions []string, ptNames s
 	}
 	return errs
 }
+
 func validatePipelineContextVariablesInParamValues(paramValues []string, prefix string, contextNames sets.String) (errs *apis.FieldError) {
 	for _, paramValue := range paramValues {
 		errs = errs.Also(substitution.ValidateNoReferencesToUnknownVariables(paramValue, prefix, contextNames).ViaField("value"))
@@ -648,7 +651,7 @@ func validatePipelineResults(results []PipelineResult, tasks []PipelineTask, fin
 				"value").ViaFieldIndex("results", idx))
 		}
 
-		expressions = filter(expressions, looksLikeResultRef)
+		expressions = filter(expressions, resultref.LooksLikeResultRef)
 		resultRefs := NewResultRefs(expressions)
 		if len(expressions) != len(resultRefs) {
 			errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("expected all of the expressions %v to be result expressions but only %v were", expressions, resultRefs),
@@ -683,16 +686,15 @@ func taskContainsResult(resultExpression string, pipelineTaskNames sets.String, 
 	for _, expression := range split {
 		if expression != "" {
 			value := stripVarSubExpression("$" + expression)
-			pipelineTaskName, _, _, _, err := parseExpression(value)
-
+			pr, err := resultref.ParseTaskExpression(value)
 			if err != nil {
 				return false
 			}
 
-			if strings.HasPrefix(value, "tasks") && !pipelineTaskNames.Has(pipelineTaskName) {
+			if strings.HasPrefix(value, "tasks") && !pipelineTaskNames.Has(pr.ResourceName) {
 				return false
 			}
-			if strings.HasPrefix(value, "finally") && !pipelineFinallyTaskNames.Has(pipelineTaskName) {
+			if strings.HasPrefix(value, "finally") && !pipelineFinallyTaskNames.Has(pr.ResourceName) {
 				return false
 			}
 		}
@@ -814,7 +816,7 @@ func validateMatrixedPipelineTaskConsumed(expressions []string, taskMapping map[
 		taskConsumed := taskMapping[pipelineTask]
 		if taskConsumed.IsMatrixed() {
 			if !strings.HasSuffix(expression, "[*]") {
-				errs = errs.Also(apis.ErrGeneric(fmt.Sprintf("A matrixed pipelineTask can only be consumed in aggregate using [*] notation, but is currently set to %s", expression)))
+				errs = errs.Also(apis.ErrGeneric("A matrixed pipelineTask can only be consumed in aggregate using [*] notation, but is currently set to " + expression))
 			}
 			filteredExpressions = append(filteredExpressions, expression)
 		}

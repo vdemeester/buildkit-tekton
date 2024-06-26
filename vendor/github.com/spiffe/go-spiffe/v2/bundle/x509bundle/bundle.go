@@ -3,7 +3,7 @@ package x509bundle
 import (
 	"crypto/x509"
 	"io"
-	"io/ioutil"
+	"os"
 	"sync"
 
 	"github.com/spiffe/go-spiffe/v2/internal/pemutil"
@@ -40,7 +40,7 @@ func FromX509Authorities(trustDomain spiffeid.TrustDomain, authorities []*x509.C
 // Load loads a bundle from a file on disk. The file must contain PEM-encoded
 // certificate blocks.
 func Load(trustDomain spiffeid.TrustDomain, path string) (*Bundle, error) {
-	fileBytes, err := ioutil.ReadFile(path)
+	fileBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, x509bundleErr.New("unable to load X.509 bundle file: %w", err)
 	}
@@ -51,7 +51,7 @@ func Load(trustDomain spiffeid.TrustDomain, path string) (*Bundle, error) {
 // Read decodes a bundle from a reader. The contents must be PEM-encoded
 // certificate blocks.
 func Read(trustDomain spiffeid.TrustDomain, r io.Reader) (*Bundle, error) {
-	b, err := ioutil.ReadAll(r)
+	b, err := io.ReadAll(r)
 	if err != nil {
 		return nil, x509bundleErr.New("unable to read X.509 bundle: %v", err)
 	}
@@ -63,12 +63,13 @@ func Read(trustDomain spiffeid.TrustDomain, r io.Reader) (*Bundle, error) {
 // blocks.
 func Parse(trustDomain spiffeid.TrustDomain, b []byte) (*Bundle, error) {
 	bundle := New(trustDomain)
+	if len(b) == 0 {
+		return bundle, nil
+	}
+
 	certs, err := pemutil.ParseCertificates(b)
 	if err != nil {
 		return nil, x509bundleErr.New("cannot parse certificate: %v", err)
-	}
-	if len(certs) == 0 {
-		return nil, x509bundleErr.New("no certificates found")
 	}
 	for _, cert := range certs {
 		bundle.AddX509Authority(cert)
@@ -80,12 +81,13 @@ func Parse(trustDomain spiffeid.TrustDomain, b []byte) (*Bundle, error) {
 // with no intermediate padding if there are more than one certificate)
 func ParseRaw(trustDomain spiffeid.TrustDomain, b []byte) (*Bundle, error) {
 	bundle := New(trustDomain)
+	if len(b) == 0 {
+		return bundle, nil
+	}
+
 	certs, err := x509.ParseCertificates(b)
 	if err != nil {
 		return nil, x509bundleErr.New("cannot parse certificate: %v", err)
-	}
-	if len(certs) == 0 {
-		return nil, x509bundleErr.New("no certificates found")
 	}
 	for _, cert := range certs {
 		bundle.AddX509Authority(cert)

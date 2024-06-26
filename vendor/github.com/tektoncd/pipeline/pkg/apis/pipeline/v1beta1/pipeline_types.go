@@ -209,6 +209,8 @@ type PipelineTask struct {
 	TaskRef *TaskRef `json:"taskRef,omitempty"`
 
 	// TaskSpec is a specification of a task
+	// Specifying TaskSpec can be disabled by setting
+	// `disable-inline-spec` feature flag..
 	// +optional
 	TaskSpec *EmbeddedTask `json:"taskSpec,omitempty"`
 
@@ -257,13 +259,13 @@ type PipelineTask struct {
 
 	// PipelineSpec is a specification of a pipeline
 	// Note: PipelineSpec is in preview mode and not yet supported
+	// Specifying TaskSpec can be disabled by setting
+	// `disable-inline-spec` feature flag..
 	// +optional
 	PipelineSpec *PipelineSpec `json:"pipelineSpec,omitempty"`
 
 	// OnError defines the exiting behavior of a PipelineRun on error
 	// can be set to [ continue | stopAndFail ]
-	// Note: OnError is in preview mode and not yet supported
-	// TODO(#7165)
 	// +optional
 	OnError PipelineTaskOnErrorType `json:"onError,omitempty"`
 }

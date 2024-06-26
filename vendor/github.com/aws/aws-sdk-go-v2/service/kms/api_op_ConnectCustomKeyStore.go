@@ -4,73 +4,105 @@ package kms
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
-	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Connects or reconnects a custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
-// to its backing key store. For an CloudHSM key store, ConnectCustomKeyStore
-// connects the key store to its associated CloudHSM cluster. For an external key
-// store, ConnectCustomKeyStore connects the key store to the external key store
-// proxy that communicates with your external key manager. The custom key store
-// must be connected before you can create KMS keys in the key store or use the KMS
-// keys it contains. You can disconnect and reconnect a custom key store at any
-// time. The connection process for a custom key store can take an extended amount
-// of time to complete. This operation starts the connection process, but it does
-// not wait for it to complete. When it succeeds, this operation quickly returns an
+// Connects or reconnects a [custom key store] to its backing key store. For an CloudHSM key store,
+// ConnectCustomKeyStore connects the key store to its associated CloudHSM cluster.
+// For an external key store, ConnectCustomKeyStore connects the key store to the
+// external key store proxy that communicates with your external key manager.
+//
+// The custom key store must be connected before you can create KMS keys in the
+// key store or use the KMS keys it contains. You can disconnect and reconnect a
+// custom key store at any time.
+//
+// The connection process for a custom key store can take an extended amount of
+// time to complete. This operation starts the connection process, but it does not
+// wait for it to complete. When it succeeds, this operation quickly returns an
 // HTTP 200 response and a JSON object with no properties. However, this response
 // does not indicate that the custom key store is connected. To get the connection
-// state of the custom key store, use the DescribeCustomKeyStores operation. This
-// operation is part of the custom key stores (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
-// feature in KMS, which combines the convenience and extensive integration of KMS
-// with the isolation and control of a key store that you own and manage. The
-// ConnectCustomKeyStore operation might fail for various reasons. To find the
-// reason, use the DescribeCustomKeyStores operation and see the
-// ConnectionErrorCode in the response. For help interpreting the
-// ConnectionErrorCode , see CustomKeyStoresListEntry . To fix the failure, use the
-// DisconnectCustomKeyStore operation to disconnect the custom key store, correct
-// the error, use the UpdateCustomKeyStore operation if necessary, and then use
-// ConnectCustomKeyStore again. CloudHSM key store During the connection process
-// for an CloudHSM key store, KMS finds the CloudHSM cluster that is associated
-// with the custom key store, creates the connection infrastructure, connects to
-// the cluster, logs into the CloudHSM client as the kmsuser CU, and rotates its
-// password. To connect an CloudHSM key store, its associated CloudHSM cluster must
-// have at least one active HSM. To get the number of active HSMs in a cluster, use
-// the DescribeClusters (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html)
-// operation. To add HSMs to the cluster, use the CreateHsm (https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_CreateHsm.html)
-// operation. Also, the kmsuser crypto user (https://docs.aws.amazon.com/kms/latest/developerguide/key-store-concepts.html#concept-kmsuser)
+// state of the custom key store, use the DescribeCustomKeyStoresoperation.
+//
+// This operation is part of the [custom key stores] feature in KMS, which combines the convenience
+// and extensive integration of KMS with the isolation and control of a key store
+// that you own and manage.
+//
+// The ConnectCustomKeyStore operation might fail for various reasons. To find the
+// reason, use the DescribeCustomKeyStoresoperation and see the ConnectionErrorCode in the response. For
+// help interpreting the ConnectionErrorCode , see CustomKeyStoresListEntry.
+//
+// To fix the failure, use the DisconnectCustomKeyStore operation to disconnect the custom key store,
+// correct the error, use the UpdateCustomKeyStoreoperation if necessary, and then use
+// ConnectCustomKeyStore again.
+//
+// # CloudHSM key store
+//
+// During the connection process for an CloudHSM key store, KMS finds the CloudHSM
+// cluster that is associated with the custom key store, creates the connection
+// infrastructure, connects to the cluster, logs into the CloudHSM client as the
+// kmsuser CU, and rotates its password.
+//
+// To connect an CloudHSM key store, its associated CloudHSM cluster must have at
+// least one active HSM. To get the number of active HSMs in a cluster, use the [DescribeClusters]
+// operation. To add HSMs to the cluster, use the [CreateHsm]operation. Also, the [kmsuser crypto user]kmsuser
 // (CU) must not be logged into the cluster. This prevents KMS from using this
-// account to log in. If you are having trouble connecting or disconnecting a
-// CloudHSM key store, see Troubleshooting an CloudHSM key store (https://docs.aws.amazon.com/kms/latest/developerguide/fix-keystore.html)
-// in the Key Management Service Developer Guide. External key store When you
-// connect an external key store that uses public endpoint connectivity, KMS tests
-// its ability to communicate with your external key manager by sending a request
-// via the external key store proxy. When you connect to an external key store that
-// uses VPC endpoint service connectivity, KMS establishes the networking elements
-// that it needs to communicate with your external key manager via the external key
-// store proxy. This includes creating an interface endpoint to the VPC endpoint
-// service and a private hosted zone for traffic between KMS and the VPC endpoint
-// service. To connect an external key store, KMS must be able to connect to the
-// external key store proxy, the external key store proxy must be able to
-// communicate with your external key manager, and the external key manager must be
-// available for cryptographic operations. If you are having trouble connecting or
-// disconnecting an external key store, see Troubleshooting an external key store (https://docs.aws.amazon.com/kms/latest/developerguide/xks-troubleshooting.html)
-// in the Key Management Service Developer Guide. Cross-account use: No. You cannot
-// perform this operation on a custom key store in a different Amazon Web Services
-// account. Required permissions: kms:ConnectCustomKeyStore (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
-// (IAM policy) Related operations
-//   - CreateCustomKeyStore
-//   - DeleteCustomKeyStore
-//   - DescribeCustomKeyStores
-//   - DisconnectCustomKeyStore
-//   - UpdateCustomKeyStore
+// account to log in.
+//
+// If you are having trouble connecting or disconnecting a CloudHSM key store, see [Troubleshooting an CloudHSM key store]
+// in the Key Management Service Developer Guide.
+//
+// # External key store
+//
+// When you connect an external key store that uses public endpoint connectivity,
+// KMS tests its ability to communicate with your external key manager by sending a
+// request via the external key store proxy.
+//
+// When you connect to an external key store that uses VPC endpoint service
+// connectivity, KMS establishes the networking elements that it needs to
+// communicate with your external key manager via the external key store proxy.
+// This includes creating an interface endpoint to the VPC endpoint service and a
+// private hosted zone for traffic between KMS and the VPC endpoint service.
+//
+// To connect an external key store, KMS must be able to connect to the external
+// key store proxy, the external key store proxy must be able to communicate with
+// your external key manager, and the external key manager must be available for
+// cryptographic operations.
+//
+// If you are having trouble connecting or disconnecting an external key store,
+// see [Troubleshooting an external key store]in the Key Management Service Developer Guide.
+//
+// Cross-account use: No. You cannot perform this operation on a custom key store
+// in a different Amazon Web Services account.
+//
+// Required permissions: [kms:ConnectCustomKeyStore] (IAM policy)
+//
+// # Related operations
+//
+// # CreateCustomKeyStore
+//
+// # DeleteCustomKeyStore
+//
+// # DescribeCustomKeyStores
+//
+// # DisconnectCustomKeyStore
+//
+// # UpdateCustomKeyStore
+//
+// Eventual consistency: The KMS API follows an eventual consistency model. For
+// more information, see [KMS eventual consistency].
+//
+// [DescribeClusters]: https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_DescribeClusters.html
+// [custom key stores]: https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html
+// [kmsuser crypto user]: https://docs.aws.amazon.com/kms/latest/developerguide/key-store-concepts.html#concept-kmsuser
+// [Troubleshooting an CloudHSM key store]: https://docs.aws.amazon.com/kms/latest/developerguide/fix-keystore.html
+// [CreateHsm]: https://docs.aws.amazon.com/cloudhsm/latest/APIReference/API_CreateHsm.html
+// [kms:ConnectCustomKeyStore]: https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html
+// [Troubleshooting an external key store]: https://docs.aws.amazon.com/kms/latest/developerguide/xks-troubleshooting.html
+// [KMS eventual consistency]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-eventual-consistency.html
+// [custom key store]: https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html
 func (c *Client) ConnectCustomKeyStore(ctx context.Context, params *ConnectCustomKeyStoreInput, optFns ...func(*Options)) (*ConnectCustomKeyStoreOutput, error) {
 	if params == nil {
 		params = &ConnectCustomKeyStoreInput{}
@@ -89,7 +121,7 @@ func (c *Client) ConnectCustomKeyStore(ctx context.Context, params *ConnectCusto
 type ConnectCustomKeyStoreInput struct {
 
 	// Enter the key store ID of the custom key store that you want to connect. To
-	// find the ID of a custom key store, use the DescribeCustomKeyStores operation.
+	// find the ID of a custom key store, use the DescribeCustomKeyStoresoperation.
 	//
 	// This member is required.
 	CustomKeyStoreId *string
@@ -105,6 +137,9 @@ type ConnectCustomKeyStoreOutput struct {
 }
 
 func (c *Client) addOperationConnectCustomKeyStoreMiddlewares(stack *middleware.Stack, options Options) (err error) {
+	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
+		return err
+	}
 	err = stack.Serialize.Add(&awsAwsjson11_serializeOpConnectCustomKeyStore{}, middleware.After)
 	if err != nil {
 		return err
@@ -113,34 +148,35 @@ func (c *Client) addOperationConnectCustomKeyStoreMiddlewares(stack *middleware.
 	if err != nil {
 		return err
 	}
+	if err := addProtocolFinalizerMiddlewares(stack, options, "ConnectCustomKeyStore"); err != nil {
+		return fmt.Errorf("add protocol finalizers: %v", err)
+	}
+
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddClientRequestIDMiddleware(stack); err != nil {
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
-	if err = smithyhttp.AddComputeContentLengthMiddleware(stack); err != nil {
+	if err = addComputeContentLength(stack); err != nil {
 		return err
 	}
 	if err = addResolveEndpointMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = v4.AddComputePayloadSHA256Middleware(stack); err != nil {
+	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetryMiddlewares(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
 		return err
 	}
-	if err = addHTTPSignerV4Middleware(stack, options); err != nil {
+	if err = addRawResponseToMetadata(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRawResponseToMetadata(stack); err != nil {
-		return err
-	}
-	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
+	if err = addRecordResponseTiming(stack); err != nil {
 		return err
 	}
 	if err = addClientUserAgent(stack, options); err != nil {
@@ -152,7 +188,7 @@ func (c *Client) addOperationConnectCustomKeyStoreMiddlewares(stack *middleware.
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
-	if err = addConnectCustomKeyStoreResolveEndpointMiddleware(stack, options); err != nil {
+	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
 		return err
 	}
 	if err = addOpConnectCustomKeyStoreValidationMiddleware(stack); err != nil {
@@ -161,7 +197,7 @@ func (c *Client) addOperationConnectCustomKeyStoreMiddlewares(stack *middleware.
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opConnectCustomKeyStore(options.Region), middleware.Before); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -173,7 +209,7 @@ func (c *Client) addOperationConnectCustomKeyStoreMiddlewares(stack *middleware.
 	if err = addRequestResponseLogging(stack, options); err != nil {
 		return err
 	}
-	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
+	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -183,130 +219,6 @@ func newServiceMetadataMiddleware_opConnectCustomKeyStore(region string) *awsmid
 	return &awsmiddleware.RegisterServiceMetadata{
 		Region:        region,
 		ServiceID:     ServiceID,
-		SigningName:   "kms",
 		OperationName: "ConnectCustomKeyStore",
 	}
-}
-
-type opConnectCustomKeyStoreResolveEndpointMiddleware struct {
-	EndpointResolver EndpointResolverV2
-	BuiltInResolver  builtInParameterResolver
-}
-
-func (*opConnectCustomKeyStoreResolveEndpointMiddleware) ID() string {
-	return "ResolveEndpointV2"
-}
-
-func (m *opConnectCustomKeyStoreResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
-	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
-) {
-	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
-		return next.HandleSerialize(ctx, in)
-	}
-
-	req, ok := in.Request.(*smithyhttp.Request)
-	if !ok {
-		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
-	}
-
-	if m.EndpointResolver == nil {
-		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
-	}
-
-	params := EndpointParameters{}
-
-	m.BuiltInResolver.ResolveBuiltIns(&params)
-
-	var resolvedEndpoint smithyendpoints.Endpoint
-	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
-	if err != nil {
-		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
-	}
-
-	req.URL = &resolvedEndpoint.URI
-
-	for k := range resolvedEndpoint.Headers {
-		req.Header.Set(
-			k,
-			resolvedEndpoint.Headers.Get(k),
-		)
-	}
-
-	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
-	if err != nil {
-		var nfe *internalauth.NoAuthenticationSchemesFoundError
-		if errors.As(err, &nfe) {
-			// if no auth scheme is found, default to sigv4
-			signingName := "kms"
-			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-
-		}
-		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
-		if errors.As(err, &ue) {
-			return out, metadata, fmt.Errorf(
-				"This operation requests signer version(s) %v but the client only supports %v",
-				ue.UnsupportedSchemes,
-				internalauth.SupportedSchemes,
-			)
-		}
-	}
-
-	for _, authScheme := range authSchemes {
-		switch authScheme.(type) {
-		case *internalauth.AuthenticationSchemeV4:
-			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
-			var signingName, signingRegion string
-			if v4Scheme.SigningName == nil {
-				signingName = "kms"
-			} else {
-				signingName = *v4Scheme.SigningName
-			}
-			if v4Scheme.SigningRegion == nil {
-				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
-			} else {
-				signingRegion = *v4Scheme.SigningRegion
-			}
-			if v4Scheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-			break
-		case *internalauth.AuthenticationSchemeV4A:
-			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
-			if v4aScheme.SigningName == nil {
-				v4aScheme.SigningName = aws.String("kms")
-			}
-			if v4aScheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
-			break
-		case *internalauth.AuthenticationSchemeNone:
-			break
-		}
-	}
-
-	return next.HandleSerialize(ctx, in)
-}
-
-func addConnectCustomKeyStoreResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
-	return stack.Serialize.Insert(&opConnectCustomKeyStoreResolveEndpointMiddleware{
-		EndpointResolver: options.EndpointResolverV2,
-		BuiltInResolver: &builtInResolver{
-			Region:       options.Region,
-			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
-			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
-			Endpoint:     options.BaseEndpoint,
-		},
-	}, "ResolveEndpoint", middleware.After)
 }

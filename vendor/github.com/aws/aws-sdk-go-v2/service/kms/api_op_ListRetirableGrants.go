@@ -4,37 +4,58 @@ package kms
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	internalauth "github.com/aws/aws-sdk-go-v2/internal/auth"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
-	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // Returns information about all grants in the Amazon Web Services account and
-// Region that have the specified retiring principal. You can specify any principal
-// in your Amazon Web Services account. The grants that are returned include grants
-// for KMS keys in your Amazon Web Services account and other Amazon Web Services
-// accounts. You might use this operation to determine which grants you may retire.
-// To retire a grant, use the RetireGrant operation. For detailed information
-// about grants, including grant terminology, see Grants in KMS (https://docs.aws.amazon.com/kms/latest/developerguide/grants.html)
-// in the Key Management Service Developer Guide . For examples of working with
-// grants in several programming languages, see Programming grants (https://docs.aws.amazon.com/kms/latest/developerguide/programming-grants.html)
-// . Cross-account use: You must specify a principal in your Amazon Web Services
-// account. However, this operation can return grants in any Amazon Web Services
-// account. You do not need kms:ListRetirableGrants permission (or any other
-// additional permission) in any Amazon Web Services account other than your own.
-// Required permissions: kms:ListRetirableGrants (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
-// (IAM policy) in your Amazon Web Services account. Related operations:
-//   - CreateGrant
-//   - ListGrants
-//   - RetireGrant
-//   - RevokeGrant
+// Region that have the specified retiring principal.
+//
+// You can specify any principal in your Amazon Web Services account. The grants
+// that are returned include grants for KMS keys in your Amazon Web Services
+// account and other Amazon Web Services accounts. You might use this operation to
+// determine which grants you may retire. To retire a grant, use the RetireGrantoperation.
+//
+// For detailed information about grants, including grant terminology, see [Grants in KMS] in the
+// Key Management Service Developer Guide . For examples of working with grants in
+// several programming languages, see [Programming grants].
+//
+// Cross-account use: You must specify a principal in your Amazon Web Services
+// account. This operation returns a list of grants where the retiring principal
+// specified in the ListRetirableGrants request is the same retiring principal on
+// the grant. This can include grants on KMS keys owned by other Amazon Web
+// Services accounts, but you do not need kms:ListRetirableGrants permission (or
+// any other additional permission) in any Amazon Web Services account other than
+// your own.
+//
+// Required permissions: [kms:ListRetirableGrants] (IAM policy) in your Amazon Web Services account.
+//
+// KMS authorizes ListRetirableGrants requests by evaluating the caller account's
+// kms:ListRetirableGrants permissions. The authorized resource in
+// ListRetirableGrants calls is the retiring principal specified in the request.
+// KMS does not evaluate the caller's permissions to verify their access to any KMS
+// keys or grants that might be returned by the ListRetirableGrants call.
+//
+// Related operations:
+//
+// # CreateGrant
+//
+// # ListGrants
+//
+// # RetireGrant
+//
+// # RevokeGrant
+//
+// Eventual consistency: The KMS API follows an eventual consistency model. For
+// more information, see [KMS eventual consistency].
+//
+// [Programming grants]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-grants.html
+// [kms:ListRetirableGrants]: https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html
+// [Grants in KMS]: https://docs.aws.amazon.com/kms/latest/developerguide/grants.html
+// [KMS eventual consistency]: https://docs.aws.amazon.com/kms/latest/developerguide/programming-eventual-consistency.html
 func (c *Client) ListRetirableGrants(ctx context.Context, params *ListRetirableGrantsInput, optFns ...func(*Options)) (*ListRetirableGrantsOutput, error) {
 	if params == nil {
 		params = &ListRetirableGrantsInput{}
@@ -53,21 +74,25 @@ func (c *Client) ListRetirableGrants(ctx context.Context, params *ListRetirableG
 type ListRetirableGrantsInput struct {
 
 	// The retiring principal for which to list grants. Enter a principal in your
-	// Amazon Web Services account. To specify the retiring principal, use the Amazon
-	// Resource Name (ARN) (https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html)
-	// of an Amazon Web Services principal. Valid principals include Amazon Web
-	// Services accounts, IAM users, IAM roles, federated users, and assumed role
-	// users. For help with the ARN syntax for a principal, see IAM ARNs (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html#identifiers-arns)
-	// in the Identity and Access Management User Guide .
+	// Amazon Web Services account.
+	//
+	// To specify the retiring principal, use the [Amazon Resource Name (ARN)] of an Amazon Web Services
+	// principal. Valid principals include Amazon Web Services accounts, IAM users, IAM
+	// roles, federated users, and assumed role users. For help with the ARN syntax for
+	// a principal, see [IAM ARNs]in the Identity and Access Management User Guide .
+	//
+	// [IAM ARNs]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html#identifiers-arns
+	// [Amazon Resource Name (ARN)]: https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html
 	//
 	// This member is required.
 	RetiringPrincipal *string
 
 	// Use this parameter to specify the maximum number of items to return. When this
 	// value is present, KMS does not return more than the specified number of items,
-	// but it might return fewer. This value is optional. If you include a value, it
-	// must be between 1 and 100, inclusive. If you do not include a value, it defaults
-	// to 50.
+	// but it might return fewer.
+	//
+	// This value is optional. If you include a value, it must be between 1 and 100,
+	// inclusive. If you do not include a value, it defaults to 50.
 	Limit *int32
 
 	// Use this parameter in a subsequent request after you receive a response with
@@ -89,7 +114,7 @@ type ListRetirableGrantsOutput struct {
 
 	// A flag that indicates whether there are more items in the list. When this value
 	// is true, the list in this response is truncated. To get more items, pass the
-	// value of the NextMarker element in thisresponse to the Marker parameter in a
+	// value of the NextMarker element in this response to the Marker parameter in a
 	// subsequent request.
 	Truncated bool
 
@@ -100,6 +125,9 @@ type ListRetirableGrantsOutput struct {
 }
 
 func (c *Client) addOperationListRetirableGrantsMiddlewares(stack *middleware.Stack, options Options) (err error) {
+	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
+		return err
+	}
 	err = stack.Serialize.Add(&awsAwsjson11_serializeOpListRetirableGrants{}, middleware.After)
 	if err != nil {
 		return err
@@ -108,34 +136,35 @@ func (c *Client) addOperationListRetirableGrantsMiddlewares(stack *middleware.St
 	if err != nil {
 		return err
 	}
+	if err := addProtocolFinalizerMiddlewares(stack, options, "ListRetirableGrants"); err != nil {
+		return fmt.Errorf("add protocol finalizers: %v", err)
+	}
+
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddClientRequestIDMiddleware(stack); err != nil {
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
-	if err = smithyhttp.AddComputeContentLengthMiddleware(stack); err != nil {
+	if err = addComputeContentLength(stack); err != nil {
 		return err
 	}
 	if err = addResolveEndpointMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = v4.AddComputePayloadSHA256Middleware(stack); err != nil {
+	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetryMiddlewares(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
 		return err
 	}
-	if err = addHTTPSignerV4Middleware(stack, options); err != nil {
+	if err = addRawResponseToMetadata(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRawResponseToMetadata(stack); err != nil {
-		return err
-	}
-	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
+	if err = addRecordResponseTiming(stack); err != nil {
 		return err
 	}
 	if err = addClientUserAgent(stack, options); err != nil {
@@ -147,7 +176,7 @@ func (c *Client) addOperationListRetirableGrantsMiddlewares(stack *middleware.St
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
-	if err = addListRetirableGrantsResolveEndpointMiddleware(stack, options); err != nil {
+	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
 		return err
 	}
 	if err = addOpListRetirableGrantsValidationMiddleware(stack); err != nil {
@@ -156,7 +185,7 @@ func (c *Client) addOperationListRetirableGrantsMiddlewares(stack *middleware.St
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opListRetirableGrants(options.Region), middleware.Before); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -168,7 +197,7 @@ func (c *Client) addOperationListRetirableGrantsMiddlewares(stack *middleware.St
 	if err = addRequestResponseLogging(stack, options); err != nil {
 		return err
 	}
-	if err = addendpointDisableHTTPSMiddleware(stack, options); err != nil {
+	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -187,9 +216,10 @@ var _ ListRetirableGrantsAPIClient = (*Client)(nil)
 type ListRetirableGrantsPaginatorOptions struct {
 	// Use this parameter to specify the maximum number of items to return. When this
 	// value is present, KMS does not return more than the specified number of items,
-	// but it might return fewer. This value is optional. If you include a value, it
-	// must be between 1 and 100, inclusive. If you do not include a value, it defaults
-	// to 50.
+	// but it might return fewer.
+	//
+	// This value is optional. If you include a value, it must be between 1 and 100,
+	// inclusive. If you do not include a value, it defaults to 50.
 	Limit int32
 
 	// Set to true if pagination should stop if the service returns a pagination token
@@ -273,130 +303,6 @@ func newServiceMetadataMiddleware_opListRetirableGrants(region string) *awsmiddl
 	return &awsmiddleware.RegisterServiceMetadata{
 		Region:        region,
 		ServiceID:     ServiceID,
-		SigningName:   "kms",
 		OperationName: "ListRetirableGrants",
 	}
-}
-
-type opListRetirableGrantsResolveEndpointMiddleware struct {
-	EndpointResolver EndpointResolverV2
-	BuiltInResolver  builtInParameterResolver
-}
-
-func (*opListRetirableGrantsResolveEndpointMiddleware) ID() string {
-	return "ResolveEndpointV2"
-}
-
-func (m *opListRetirableGrantsResolveEndpointMiddleware) HandleSerialize(ctx context.Context, in middleware.SerializeInput, next middleware.SerializeHandler) (
-	out middleware.SerializeOutput, metadata middleware.Metadata, err error,
-) {
-	if awsmiddleware.GetRequiresLegacyEndpoints(ctx) {
-		return next.HandleSerialize(ctx, in)
-	}
-
-	req, ok := in.Request.(*smithyhttp.Request)
-	if !ok {
-		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
-	}
-
-	if m.EndpointResolver == nil {
-		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
-	}
-
-	params := EndpointParameters{}
-
-	m.BuiltInResolver.ResolveBuiltIns(&params)
-
-	var resolvedEndpoint smithyendpoints.Endpoint
-	resolvedEndpoint, err = m.EndpointResolver.ResolveEndpoint(ctx, params)
-	if err != nil {
-		return out, metadata, fmt.Errorf("failed to resolve service endpoint, %w", err)
-	}
-
-	req.URL = &resolvedEndpoint.URI
-
-	for k := range resolvedEndpoint.Headers {
-		req.Header.Set(
-			k,
-			resolvedEndpoint.Headers.Get(k),
-		)
-	}
-
-	authSchemes, err := internalauth.GetAuthenticationSchemes(&resolvedEndpoint.Properties)
-	if err != nil {
-		var nfe *internalauth.NoAuthenticationSchemesFoundError
-		if errors.As(err, &nfe) {
-			// if no auth scheme is found, default to sigv4
-			signingName := "kms"
-			signingRegion := m.BuiltInResolver.(*builtInResolver).Region
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-
-		}
-		var ue *internalauth.UnSupportedAuthenticationSchemeSpecifiedError
-		if errors.As(err, &ue) {
-			return out, metadata, fmt.Errorf(
-				"This operation requests signer version(s) %v but the client only supports %v",
-				ue.UnsupportedSchemes,
-				internalauth.SupportedSchemes,
-			)
-		}
-	}
-
-	for _, authScheme := range authSchemes {
-		switch authScheme.(type) {
-		case *internalauth.AuthenticationSchemeV4:
-			v4Scheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4)
-			var signingName, signingRegion string
-			if v4Scheme.SigningName == nil {
-				signingName = "kms"
-			} else {
-				signingName = *v4Scheme.SigningName
-			}
-			if v4Scheme.SigningRegion == nil {
-				signingRegion = m.BuiltInResolver.(*builtInResolver).Region
-			} else {
-				signingRegion = *v4Scheme.SigningRegion
-			}
-			if v4Scheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4Scheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, signingName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, signingRegion)
-			break
-		case *internalauth.AuthenticationSchemeV4A:
-			v4aScheme, _ := authScheme.(*internalauth.AuthenticationSchemeV4A)
-			if v4aScheme.SigningName == nil {
-				v4aScheme.SigningName = aws.String("kms")
-			}
-			if v4aScheme.DisableDoubleEncoding != nil {
-				// The signer sets an equivalent value at client initialization time.
-				// Setting this context value will cause the signer to extract it
-				// and override the value set at client initialization time.
-				ctx = internalauth.SetDisableDoubleEncoding(ctx, *v4aScheme.DisableDoubleEncoding)
-			}
-			ctx = awsmiddleware.SetSigningName(ctx, *v4aScheme.SigningName)
-			ctx = awsmiddleware.SetSigningRegion(ctx, v4aScheme.SigningRegionSet[0])
-			break
-		case *internalauth.AuthenticationSchemeNone:
-			break
-		}
-	}
-
-	return next.HandleSerialize(ctx, in)
-}
-
-func addListRetirableGrantsResolveEndpointMiddleware(stack *middleware.Stack, options Options) error {
-	return stack.Serialize.Insert(&opListRetirableGrantsResolveEndpointMiddleware{
-		EndpointResolver: options.EndpointResolverV2,
-		BuiltInResolver: &builtInResolver{
-			Region:       options.Region,
-			UseDualStack: options.EndpointOptions.UseDualStackEndpoint,
-			UseFIPS:      options.EndpointOptions.UseFIPSEndpoint,
-			Endpoint:     options.BaseEndpoint,
-		},
-	}, "ResolveEndpoint", middleware.After)
 }

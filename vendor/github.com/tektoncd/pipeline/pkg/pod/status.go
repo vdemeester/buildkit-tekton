@@ -38,23 +38,23 @@ import (
 	"knative.dev/pkg/apis"
 )
 
-const (
-	// ReasonCouldntGetTask indicates that the reason for the failure status is that the
-	// Task couldn't be found
-	ReasonCouldntGetTask = "CouldntGetTask"
-
+// Aliased for backwards compatibility; do not add additional TaskRun reasons here
+var (
 	// ReasonFailedResolution indicated that the reason for failure status is
 	// that references within the TaskRun could not be resolved
-	ReasonFailedResolution = "TaskRunResolutionFailed"
-
+	ReasonFailedResolution = v1.TaskRunReasonFailedResolution.String()
 	// ReasonFailedValidation indicated that the reason for failure status is
 	// that taskrun failed runtime validation
-	ReasonFailedValidation = "TaskRunValidationFailed"
-
+	ReasonFailedValidation = v1.TaskRunReasonFailedValidation.String()
 	// ReasonTaskFailedValidation indicated that the reason for failure status is
 	// that task failed runtime validation
-	ReasonTaskFailedValidation = "TaskValidationFailed"
+	ReasonTaskFailedValidation = v1.TaskRunReasonTaskFailedValidation.String()
+	// ReasonResourceVerificationFailed indicates that the task fails the trusted resource verification,
+	// it could be the content has changed, signature is invalid or public key is invalid
+	ReasonResourceVerificationFailed = v1.TaskRunReasonResourceVerificationFailed.String()
+)
 
+const (
 	// ReasonExceededResourceQuota indicates that the TaskRun failed to create a pod due to
 	// a ResourceQuota in the namespace
 	ReasonExceededResourceQuota = "ExceededResourceQuota"
@@ -79,11 +79,7 @@ const (
 
 	// ReasonPending indicates that the pod is in corev1.Pending, and the reason is not
 	// ReasonExceededNodeResources or isPodHitConfigError
-	ReasonPending = "Pending"
-
-	// ReasonResourceVerificationFailed indicates that the task fails the trusted resource verification,
-	// it could be the content has changed, signature is invalid or public key is invalid
-	ReasonResourceVerificationFailed = "ResourceVerificationFailed"
+	ReasonPodPending = "Pending"
 
 	// timeFormat is RFC3339 with millisecond
 	timeFormat = "2006-01-02T15:04:05.000Z07:00"
@@ -129,10 +125,15 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 
 	sortPodContainerStatuses(pod.Status.ContainerStatuses, pod.Spec.Containers)
 
-	complete := areStepsComplete(pod) || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+	complete := areContainersCompleted(ctx, pod) || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 
 	if complete {
-		updateCompletedTaskRunStatus(logger, trs, pod)
+		onError, ok := tr.Annotations[v1.PipelineTaskOnErrorAnnotation]
+		if ok {
+			updateCompletedTaskRunStatus(logger, trs, pod, v1.PipelineTaskOnErrorType(onError))
+		} else {
+			updateCompletedTaskRunStatus(logger, trs, pod, "")
+		}
 	} else {
 		updateIncompleteTaskRunStatus(trs, pod)
 	}
@@ -146,7 +147,7 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 	for _, s := range pod.Status.ContainerStatuses {
 		if IsContainerStep(s.Name) {
 			stepStatuses = append(stepStatuses, s)
-		} else if isContainerSidecar(s.Name) {
+		} else if IsContainerSidecar(s.Name) {
 			sidecarStatuses = append(sidecarStatuses, s)
 		}
 	}
@@ -161,6 +162,49 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 	trs.Results = removeDuplicateResults(trs.Results)
 
 	return *trs, merr.ErrorOrNil()
+}
+
+func createTaskResultsFromStepResults(stepRunRes []v1.TaskRunStepResult, neededStepResults map[string]string) []v1.TaskRunResult {
+	taskResults := []v1.TaskRunResult{}
+	for _, r := range stepRunRes {
+		// this result was requested by the Task
+		if _, ok := neededStepResults[r.Name]; ok {
+			taskRunResult := v1.TaskRunResult{
+				Name:  neededStepResults[r.Name],
+				Type:  r.Type,
+				Value: r.Value,
+			}
+			taskResults = append(taskResults, taskRunResult)
+		}
+	}
+	return taskResults
+}
+
+func getTaskResultsFromSidecarLogs(sidecarLogResults []result.RunResult) []result.RunResult {
+	taskResultsFromSidecarLogs := []result.RunResult{}
+	for _, slr := range sidecarLogResults {
+		if slr.ResultType == result.TaskRunResultType {
+			taskResultsFromSidecarLogs = append(taskResultsFromSidecarLogs, slr)
+		}
+	}
+	return taskResultsFromSidecarLogs
+}
+
+func getStepResultsFromSidecarLogs(sidecarLogResults []result.RunResult, containerName string) ([]result.RunResult, error) {
+	stepResultsFromSidecarLogs := []result.RunResult{}
+	for _, slr := range sidecarLogResults {
+		if slr.ResultType == result.StepResultType {
+			stepName, resultName, err := sidecarlogresults.ExtractStepAndResultFromSidecarResultName(slr.Key)
+			if err != nil {
+				return []result.RunResult{}, err
+			}
+			if stepName == containerName {
+				slr.Key = resultName
+				stepResultsFromSidecarLogs = append(stepResultsFromSidecarLogs, slr)
+			}
+		}
+	}
+	return stepResultsFromSidecarLogs, nil
 }
 
 func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredLogger, stepStatuses []corev1.ContainerStatus, tr *v1.TaskRun, podPhase corev1.PodPhase, kubeclient kubernetes.Interface, ts *v1.TaskSpec) *multierror.Error {
@@ -178,23 +222,69 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 
 	// Extract results from sidecar logs
 	sidecarLogsResultsEnabled := config.FromContextOrDefaults(ctx).FeatureFlags.ResultExtractionMethod == config.ResultExtractionMethodSidecarLogs
-	if sidecarLogsResultsEnabled && tr.Status.TaskSpec.Results != nil {
-		// extraction of results from sidecar logs
-		sidecarLogResults, err := sidecarlogresults.GetResultsFromSidecarLogs(ctx, kubeclient, tr.Namespace, tr.Status.PodName, pipeline.ReservedResultsSidecarContainerName, podPhase)
-		if err != nil {
-			merr = multierror.Append(merr, err)
-		}
+	// temporary solution to check if artifacts sidecar created in taskRun as we don't have the api for users to declare if a step/task is producing artifacts yet
+	artifactsSidecarCreated := artifactsPathReferenced(ts.Steps)
+	sidecarLogResults := []result.RunResult{}
 
-		// populate task run CRD with results from sidecar logs
-		taskResults, _ := filterResults(sidecarLogResults, specResults)
-		if tr.IsDone() {
-			trs.Results = append(trs.Results, taskResults...)
+	if sidecarLogsResultsEnabled {
+		// extraction of results from sidecar logs
+		if tr.Status.TaskSpec.Results != nil || artifactsSidecarCreated {
+			slr, err := sidecarlogresults.GetResultsFromSidecarLogs(ctx, kubeclient, tr.Namespace, tr.Status.PodName, pipeline.ReservedResultsSidecarContainerName, podPhase)
+			if err != nil {
+				merr = multierror.Append(merr, err)
+			}
+			sidecarLogResults = append(sidecarLogResults, slr...)
 		}
 	}
+	// Populate Task results from sidecar logs
+	taskResultsFromSidecarLogs := getTaskResultsFromSidecarLogs(sidecarLogResults)
+	taskResults, _, _ := filterResults(taskResultsFromSidecarLogs, specResults, nil)
+	if tr.IsDone() {
+		trs.Results = append(trs.Results, taskResults...)
+	}
+
 	// Continue with extraction of termination messages
 	for _, s := range stepStatuses {
 		// Avoid changing the original value by modifying the pointer value.
 		state := s.State.DeepCopy()
+		taskRunStepResults := []v1.TaskRunStepResult{}
+
+		// Identify Step Results
+		stepResults := []v1.StepResult{}
+		if ts != nil {
+			for _, step := range ts.Steps {
+				if GetContainerName(step.Name) == s.Name {
+					stepResults = append(stepResults, step.Results...)
+				}
+			}
+		}
+		// Identify StepResults needed by the Task Results
+		neededStepResults, err := findStepResultsFetchedByTask(s.Name, specResults)
+		if err != nil {
+			merr = multierror.Append(merr, err)
+		}
+
+		// populate step results from sidecar logs
+		stepResultsFromSidecarLogs, err := getStepResultsFromSidecarLogs(sidecarLogResults, s.Name)
+		if err != nil {
+			merr = multierror.Append(merr, err)
+		}
+		_, stepRunRes, _ := filterResults(stepResultsFromSidecarLogs, specResults, stepResults)
+		if tr.IsDone() {
+			taskRunStepResults = append(taskRunStepResults, stepRunRes...)
+			// Set TaskResults from StepResults
+			trs.Results = append(trs.Results, createTaskResultsFromStepResults(stepRunRes, neededStepResults)...)
+		}
+		var as v1.Artifacts
+
+		err = setStepArtifactsValueFromSidecarLogs(sidecarLogResults, s.Name, &as)
+		if err != nil {
+			logger.Errorf("Failed to set artifacts value from sidecar logs: %v", err)
+			merr = multierror.Append(merr, err)
+		}
+
+		// Parse termination messages
+		terminationReason := ""
 		if state.Terminated != nil && len(state.Terminated.Message) != 0 {
 			msg := state.Terminated.Message
 
@@ -203,6 +293,16 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 				logger.Errorf("termination message could not be parsed as JSON: %v", err)
 				merr = multierror.Append(merr, err)
 			} else {
+				for _, r := range results {
+					if r.ResultType == result.StepArtifactsResultType {
+						if err := json.Unmarshal([]byte(r.Value), &as); err != nil {
+							logger.Errorf("result value could not be parsed as Artifacts: %v", err)
+							merr = multierror.Append(merr, err)
+						}
+						// there should be only one ArtifactsResult
+						break
+					}
+				}
 				time, err := extractStartedAtTimeFromResults(results)
 				if err != nil {
 					logger.Errorf("error setting the start time of step %q in taskrun %q: %v", s.Name, tr.Name, err)
@@ -214,8 +314,11 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 					merr = multierror.Append(merr, err)
 				}
 
-				taskResults, filteredResults := filterResults(results, specResults)
+				taskResults, stepRunRes, filteredResults := filterResults(results, specResults, stepResults)
 				if tr.IsDone() {
+					taskRunStepResults = append(taskRunStepResults, stepRunRes...)
+					// Set TaskResults from StepResults
+					taskResults = append(taskResults, createTaskResultsFromStepResults(stepRunRes, neededStepResults)...)
 					trs.Results = append(trs.Results, taskResults...)
 				}
 				msg, err = createMessageFromResults(filteredResults)
@@ -231,17 +334,33 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 				if exitCode != nil {
 					state.Terminated.ExitCode = *exitCode
 				}
+
+				terminationFromResults := extractTerminationReasonFromResults(results)
+				terminationReason = getTerminationReason(state.Terminated.Reason, terminationFromResults, exitCode)
 			}
 		}
 		trs.Steps = append(trs.Steps, v1.StepState{
-			ContainerState: *state,
-			Name:           trimStepPrefix(s.Name),
-			Container:      s.Name,
-			ImageID:        s.ImageID,
+			ContainerState:    *state,
+			Name:              trimStepPrefix(s.Name),
+			Container:         s.Name,
+			ImageID:           s.ImageID,
+			Results:           taskRunStepResults,
+			TerminationReason: terminationReason,
+			Inputs:            as.Inputs,
+			Outputs:           as.Outputs,
 		})
 	}
 
 	return merr
+}
+
+func setStepArtifactsValueFromSidecarLogs(results []result.RunResult, name string, artifacts *v1.Artifacts) error {
+	for _, r := range results {
+		if r.Key == name && r.ResultType == result.StepArtifactsResultType {
+			return json.Unmarshal([]byte(r.Value), artifacts)
+		}
+	}
+	return nil
 }
 
 func setTaskRunStatusBasedOnSidecarStatus(sidecarStatuses []corev1.ContainerStatus, trs *v1.TaskRunStatus) {
@@ -266,15 +385,42 @@ func createMessageFromResults(results []result.RunResult) (string, error) {
 	return string(bytes), nil
 }
 
+// findStepResultsFetchedByTask fetches step results that the Task needs.
+// It accepts a container name and the TaskResults as input and outputs
+// a map with the name of the step result as the key and the name of the task result that is fetching it as value.
+func findStepResultsFetchedByTask(containerName string, specResults []v1.TaskResult) (map[string]string, error) {
+	neededStepResults := map[string]string{}
+	for _, r := range specResults {
+		if r.Value != nil {
+			if r.Value.StringVal != "" {
+				sName, resultName, err := v1.ExtractStepResultName(r.Value.StringVal)
+				if err != nil {
+					return nil, err
+				}
+				// Only look at named results - referencing unnamed steps is unsupported.
+				if GetContainerName(sName) == containerName {
+					neededStepResults[resultName] = r.Name
+				}
+			}
+		}
+	}
+	return neededStepResults, nil
+}
+
 // filterResults filters the RunResults and TaskResults based on the results declared in the task spec.
 // It returns a slice of any of the input results that are defined in the task spec, converted to TaskRunResults,
 // and a slice of any of the RunResults that don't represent internal values (i.e. those that should not be displayed in the TaskRun status.
-func filterResults(results []result.RunResult, specResults []v1.TaskResult) ([]v1.TaskRunResult, []result.RunResult) {
+func filterResults(results []result.RunResult, specResults []v1.TaskResult, stepResults []v1.StepResult) ([]v1.TaskRunResult, []v1.TaskRunStepResult, []result.RunResult) {
 	var taskResults []v1.TaskRunResult
+	var taskRunStepResults []v1.TaskRunStepResult
 	var filteredResults []result.RunResult
 	neededTypes := make(map[string]v1.ResultsType)
+	neededStepTypes := make(map[string]v1.ResultsType)
 	for _, r := range specResults {
 		neededTypes[r.Name] = r.Type
+	}
+	for _, r := range stepResults {
+		neededStepTypes[r.Name] = r.Type
 	}
 	for _, r := range results {
 		switch r.ResultType {
@@ -300,6 +446,31 @@ func filterResults(results []result.RunResult, specResults []v1.TaskResult) ([]v
 			}
 			taskResults = append(taskResults, taskRunResult)
 			filteredResults = append(filteredResults, r)
+		case result.StepResultType:
+			var taskRunStepResult v1.TaskRunStepResult
+			if neededStepTypes[r.Key] == v1.ResultsTypeString {
+				taskRunStepResult = v1.TaskRunStepResult{
+					Name:  r.Key,
+					Type:  v1.ResultsTypeString,
+					Value: *v1.NewStructuredValues(r.Value),
+				}
+			} else {
+				v := v1.ResultValue{}
+				err := v.UnmarshalJSON([]byte(r.Value))
+				if err != nil {
+					continue
+				}
+				taskRunStepResult = v1.TaskRunStepResult{
+					Name:  r.Key,
+					Type:  v1.ResultsType(v.Type),
+					Value: v,
+				}
+			}
+			taskRunStepResults = append(taskRunStepResults, taskRunStepResult)
+			filteredResults = append(filteredResults, r)
+		case result.StepArtifactsResultType:
+			filteredResults = append(filteredResults, r)
+			continue
 		case result.InternalTektonResultType:
 			// Internal messages are ignored because they're not used as external result
 			continue
@@ -307,8 +478,7 @@ func filterResults(results []result.RunResult, specResults []v1.TaskResult) ([]v
 			filteredResults = append(filteredResults, r)
 		}
 	}
-
-	return taskResults, filteredResults
+	return taskResults, taskRunStepResults, filteredResults
 }
 
 func removeDuplicateResults(taskRunResult []v1.TaskRunResult) []v1.TaskRunResult {
@@ -359,10 +529,35 @@ func extractExitCodeFromResults(results []result.RunResult) (*int32, error) {
 	return nil, nil //nolint:nilnil // would be more ergonomic to return a sentinel error
 }
 
-func updateCompletedTaskRunStatus(logger *zap.SugaredLogger, trs *v1.TaskRunStatus, pod *corev1.Pod) {
+func extractTerminationReasonFromResults(results []result.RunResult) string {
+	for _, r := range results {
+		if r.ResultType == result.InternalTektonResultType && r.Key == "Reason" {
+			return r.Value
+		}
+	}
+	return ""
+}
+
+func getTerminationReason(terminatedStateReason string, terminationFromResults string, exitCodeFromResults *int32) string {
+	if terminationFromResults != "" {
+		return terminationFromResults
+	}
+
+	if exitCodeFromResults != nil {
+		return TerminationReasonContinued
+	}
+
+	return terminatedStateReason
+}
+
+func updateCompletedTaskRunStatus(logger *zap.SugaredLogger, trs *v1.TaskRunStatus, pod *corev1.Pod, onError v1.PipelineTaskOnErrorType) {
 	if DidTaskRunFail(pod) {
 		msg := getFailureMessage(logger, pod)
-		markStatusFailure(trs, v1.TaskRunReasonFailed.String(), msg)
+		if onError == v1.PipelineTaskContinue {
+			markStatusFailure(trs, v1.TaskRunReasonFailureIgnored.String(), msg)
+		} else {
+			markStatusFailure(trs, v1.TaskRunReasonFailed.String(), msg)
+		}
 	} else {
 		markStatusSuccess(trs)
 	}
@@ -384,7 +579,7 @@ func updateIncompleteTaskRunStatus(trs *v1.TaskRunStatus, pod *corev1.Pod) {
 		case isPullImageError(pod):
 			markStatusRunning(trs, ReasonPullImageFailed, getWaitingMessage(pod))
 		default:
-			markStatusRunning(trs, ReasonPending, getWaitingMessage(pod))
+			markStatusRunning(trs, ReasonPodPending, getWaitingMessage(pod))
 		}
 	case corev1.PodSucceeded, corev1.PodFailed, corev1.PodUnknown:
 		// Do nothing; pod has completed or is in an unknown state.
@@ -419,16 +614,45 @@ func IsPodArchived(pod *corev1.Pod, trs *v1.TaskRunStatus) bool {
 	return false
 }
 
-func areStepsComplete(pod *corev1.Pod) bool {
-	stepsComplete := len(pod.Status.ContainerStatuses) > 0 && pod.Status.Phase == corev1.PodRunning
-	for _, s := range pod.Status.ContainerStatuses {
-		if IsContainerStep(s.Name) {
-			if s.State.Terminated == nil {
-				stepsComplete = false
-			}
+// containerNameFilter is a function that filters container names.
+type containerNameFilter func(name string) bool
+
+// isMatchingAnyFilter returns true if the container name matches any of the filters.
+func isMatchingAnyFilter(name string, filters []containerNameFilter) bool {
+	for _, filter := range filters {
+		if filter(name) {
+			return true
 		}
 	}
-	return stepsComplete
+	return false
+}
+
+// areContainersCompleted returns true if all related containers in the pod are completed.
+func areContainersCompleted(ctx context.Context, pod *corev1.Pod) bool {
+	nameFilters := []containerNameFilter{IsContainerStep}
+	if config.FromContextOrDefaults(ctx).FeatureFlags.ResultExtractionMethod == config.ResultExtractionMethodSidecarLogs {
+		// If we are using sidecar logs to extract results, we need to wait for the sidecar to complete.
+		// Avoid failing to obtain the final result from the sidecar because the sidecar is not yet complete.
+		nameFilters = append(nameFilters, func(name string) bool {
+			return name == pipeline.ReservedResultsSidecarContainerName
+		})
+	}
+	return checkContainersCompleted(pod, nameFilters)
+}
+
+// checkContainersCompleted returns true if containers in the pod are completed.
+func checkContainersCompleted(pod *corev1.Pod, nameFilters []containerNameFilter) bool {
+	if len(pod.Status.ContainerStatuses) == 0 ||
+		!(pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded) {
+		return false
+	}
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if isMatchingAnyFilter(containerStatus.Name, nameFilters) && containerStatus.State.Terminated == nil {
+			// if any container is not completed, return false
+			return false
+		}
+	}
+	return true
 }
 
 func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
@@ -443,7 +667,7 @@ func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
 	// First, try to surface an error about the actual init container that failed.
 	for _, status := range pod.Status.InitContainerStatuses {
 		if msg := extractContainerFailureMessage(logger, status, pod.ObjectMeta); len(msg) > 0 {
-			return fmt.Sprintf("init container failed, %s", msg)
+			return "init container failed, " + msg
 		}
 	}
 
@@ -479,18 +703,12 @@ func extractContainerFailureMessage(logger *zap.SugaredLogger, status corev1.Con
 		msg := status.State.Terminated.Message
 		r, _ := termination.ParseMessage(logger, msg)
 		for _, runResult := range r {
-			if runResult.ResultType == result.InternalTektonResultType && runResult.Key == "Reason" && runResult.Value == "TimeoutExceeded" {
-				// Newline required at end to prevent yaml parser from breaking the log help text at 80 chars
-				return fmt.Sprintf("%q exited because the step exceeded the specified timeout limit; for logs run: kubectl -n %s logs %s -c %s\n",
-					status.Name,
-					podMetaData.Namespace, podMetaData.Name, status.Name)
+			if runResult.ResultType == result.InternalTektonResultType && runResult.Key == "Reason" && runResult.Value == TerminationReasonTimeoutExceeded {
+				return fmt.Sprintf("%q exited because the step exceeded the specified timeout limit", status.Name)
 			}
 		}
 		if term.ExitCode != 0 {
-			// Newline required at end to prevent yaml parser from breaking the log help text at 80 chars
-			return fmt.Sprintf("%q exited with code %d (image: %q); for logs run: kubectl -n %s logs %s -c %s\n",
-				status.Name, term.ExitCode, status.ImageID,
-				podMetaData.Namespace, podMetaData.Name, status.Name)
+			return fmt.Sprintf("%q exited with code %d", status.Name, term.ExitCode)
 		}
 	}
 

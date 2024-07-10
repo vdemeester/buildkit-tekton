@@ -246,12 +246,17 @@ func (h *hashivaultClient) public() (crypto.PublicKey, error) {
 			return nil
 		},
 	)
+
+	item := h.keyCache.Get(cacheKey, ttlcache.WithLoader[string, crypto.PublicKey](loader))
 	if lerr != nil {
 		return nil, lerr
 	}
 
-	item := h.keyCache.Get(cacheKey, ttlcache.WithLoader[string, crypto.PublicKey](loader))
-	return item.Value(), lerr
+	if item == nil {
+		return nil, fmt.Errorf("unable to retrieve an item from the cache by the provided key")
+	}
+
+	return item.Value(), nil
 }
 
 func (h hashivaultClient) sign(digest []byte, alg crypto.Hash, opts ...signature.SignOption) ([]byte, error) {
@@ -271,9 +276,10 @@ func (h hashivaultClient) sign(digest []byte, alg crypto.Hash, opts ...signature
 	}
 
 	signResult, err := client.Write(fmt.Sprintf("/%s/sign/%s%s", h.transitSecretEnginePath, h.keyPath, hashString(alg)), map[string]interface{}{
-		"input":       base64.StdEncoding.Strict().EncodeToString(digest),
-		"prehashed":   alg != crypto.Hash(0),
-		"key_version": keyVersion,
+		"input":               base64.StdEncoding.Strict().EncodeToString(digest),
+		"prehashed":           alg != crypto.Hash(0),
+		"key_version":         keyVersion,
+		"signature_algorithm": "pkcs1v15",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transit: failed to sign payload: %w", err)

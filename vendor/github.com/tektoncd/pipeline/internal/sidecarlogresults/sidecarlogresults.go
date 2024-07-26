@@ -25,8 +25,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/result"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
@@ -34,12 +37,27 @@ import (
 )
 
 // ErrSizeExceeded indicates that the result exceeded its maximum allowed size
-var ErrSizeExceeded = errors.New("results size exceeds configured limit")
+var (
+	ErrSizeExceeded = errors.New("results size exceeds configured limit")
+	stepDir         = pipeline.StepsDir
+)
+
+type SidecarLogResultType string
+
+const (
+	taskResultType SidecarLogResultType = "task"
+	stepResultType SidecarLogResultType = "step"
+
+	stepArtifactType           SidecarLogResultType = "stepArtifact"
+	taskArtifactType           SidecarLogResultType = "taskArtifact"
+	sidecarResultNameSeparator string               = "."
+)
 
 // SidecarLogResult holds fields for storing extracted results
 type SidecarLogResult struct {
-	Name  string
-	Value string
+	Name  string               `json:"name"`
+	Value string               `json:"value"`
+	Type  SidecarLogResultType `json:"type"`
 }
 
 func fileExists(filename string) (bool, error) {
@@ -81,7 +99,7 @@ func waitForStepsToFinish(runDir string) error {
 			// in either case, existence of out.err marks that the step errored and the following steps will
 			// not run. We want the function to break out with nil error in that case so that
 			// the existing results can be logged.
-			if exists, err = fileExists(fmt.Sprintf("%s.err", stepFile)); exists || err != nil {
+			if exists, err = fileExists(stepFile + ".err"); exists || err != nil {
 				return err
 			}
 		}
@@ -89,33 +107,79 @@ func waitForStepsToFinish(runDir string) error {
 	return nil
 }
 
+func createSidecarResultName(stepName, resultName string) string {
+	return fmt.Sprintf("%s%s%s", stepName, sidecarResultNameSeparator, resultName)
+}
+
+// ExtractStepAndResultFromSidecarResultName splits the result name to extract the step
+// and result name from it. It only works if the format is <stepName>.<resultName>
+func ExtractStepAndResultFromSidecarResultName(sidecarResultName string) (string, string, error) {
+	splitString := strings.SplitN(sidecarResultName, sidecarResultNameSeparator, 2)
+	if len(splitString) != 2 {
+		return "", "", fmt.Errorf("invalid string %s : expected somtthing that looks like <stepName>.<resultName>", sidecarResultName)
+	}
+	return splitString[0], splitString[1], nil
+}
+
+func readResults(resultsDir, resultFile, stepName string, resultType SidecarLogResultType) (SidecarLogResult, error) {
+	value, err := os.ReadFile(filepath.Join(resultsDir, resultFile))
+	if os.IsNotExist(err) {
+		return SidecarLogResult{}, nil
+	} else if err != nil {
+		return SidecarLogResult{}, fmt.Errorf("error reading the results file %w", err)
+	}
+	resultName := resultFile
+	if resultType == stepResultType {
+		resultName = createSidecarResultName(stepName, resultFile)
+	}
+	return SidecarLogResult{
+		Name:  resultName,
+		Value: string(value),
+		Type:  resultType,
+	}, nil
+}
+
 // LookForResults waits for results to be written out by the steps
 // in their results path and prints them in a structured way to its
 // stdout so that the reconciler can parse those logs.
-func LookForResults(w io.Writer, runDir string, resultsDir string, resultNames []string) error {
+func LookForResults(w io.Writer, runDir string, resultsDir string, resultNames []string, stepResultsDir string, stepResults map[string][]string) error {
 	if err := waitForStepsToFinish(runDir); err != nil {
 		return fmt.Errorf("error while waiting for the steps to finish  %w", err)
 	}
 	results := make(chan SidecarLogResult)
 	g := new(errgroup.Group)
 	for _, resultFile := range resultNames {
-		resultFile := resultFile
-
 		g.Go(func() error {
-			value, err := os.ReadFile(filepath.Join(resultsDir, resultFile))
-			if os.IsNotExist(err) {
-				return nil
-			} else if err != nil {
-				return fmt.Errorf("error reading the results file %w", err)
+			newResult, err := readResults(resultsDir, resultFile, "", taskResultType)
+			if err != nil {
+				return err
 			}
-			newResult := SidecarLogResult{
-				Name:  resultFile,
-				Value: string(value),
+			if newResult.Name == "" {
+				return nil
 			}
 			results <- newResult
 			return nil
 		})
 	}
+
+	for sName, sresults := range stepResults {
+		for _, resultName := range sresults {
+			stepResultsDir := filepath.Join(stepResultsDir, sName, "results")
+
+			g.Go(func() error {
+				newResult, err := readResults(stepResultsDir, resultName, sName, stepResultType)
+				if err != nil {
+					return err
+				}
+				if newResult.Name == "" {
+					return nil
+				}
+				results <- newResult
+				return nil
+			})
+		}
+	}
+
 	channelGroup := new(errgroup.Group)
 	channelGroup.Go(func() error {
 		if err := g.Wait(); err != nil {
@@ -132,6 +196,37 @@ func LookForResults(w io.Writer, runDir string, resultsDir string, resultNames [
 	}
 	if err := channelGroup.Wait(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// LookForArtifacts searches for and processes artifacts within a specified run directory.
+// It looks for "provenance.json" files within the "artifacts" subdirectory of each named step.
+// If the provenance file exists, the function extracts artifact information, formats it into a
+// JSON string, and encodes it for output alongside relevant metadata (step name, artifact type).
+func LookForArtifacts(w io.Writer, names []string, runDir string) error {
+	if err := waitForStepsToFinish(runDir); err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		p := filepath.Join(stepDir, name, "artifacts", "provenance.json")
+		if exist, err := fileExists(p); err != nil {
+			return err
+		} else if !exist {
+			continue
+		}
+		subRes, err := extractArtifactsFromFile(p)
+		if err != nil {
+			return err
+		}
+		values, err := json.Marshal(&subRes)
+		if err != nil {
+			return err
+		}
+		if err := encode(w, SidecarLogResult{Name: name, Value: string(values), Type: stepArtifactType}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -183,10 +278,39 @@ func parseResults(resultBytes []byte, maxResultLimit int) (result.RunResult, err
 	if len(resultBytes) > maxResultLimit {
 		return runResult, fmt.Errorf("invalid result \"%s\": %w of %d", res.Name, ErrSizeExceeded, maxResultLimit)
 	}
+	var resultType result.ResultType
+	switch res.Type {
+	case taskResultType:
+		resultType = result.TaskRunResultType
+	case stepResultType:
+		resultType = result.StepResultType
+	case stepArtifactType:
+		resultType = result.StepArtifactsResultType
+	case taskArtifactType:
+		resultType = result.TaskRunArtifactsResultType
+	default:
+		return result.RunResult{}, fmt.Errorf("invalid sidecar result type %v. Must be %v or %v or %v", res.Type, taskResultType, stepResultType, stepArtifactType)
+	}
 	runResult = result.RunResult{
 		Key:        res.Name,
 		Value:      res.Value,
-		ResultType: result.TaskRunResultType,
+		ResultType: resultType,
 	}
 	return runResult, nil
+}
+
+func parseArtifacts(fileContent []byte) (v1.Artifacts, error) {
+	var as v1.Artifacts
+	if err := json.Unmarshal(fileContent, &as); err != nil {
+		return as, fmt.Errorf("invalid artifacts : %w", err)
+	}
+	return as, nil
+}
+
+func extractArtifactsFromFile(filename string) (v1.Artifacts, error) {
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return v1.Artifacts{}, fmt.Errorf("error reading the results file %w", err)
+	}
+	return parseArtifacts(b)
 }

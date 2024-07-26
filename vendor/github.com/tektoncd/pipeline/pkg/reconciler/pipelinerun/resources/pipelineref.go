@@ -24,12 +24,14 @@ import (
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	resolutionV1beta1 "github.com/tektoncd/pipeline/pkg/apis/resolution/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	"github.com/tektoncd/pipeline/pkg/reconciler/apiserver"
 	rprp "github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/pipelinespec"
 	"github.com/tektoncd/pipeline/pkg/remote"
-	"github.com/tektoncd/pipeline/pkg/remote/resolution"
-	remoteresource "github.com/tektoncd/pipeline/pkg/resolution/resource"
+	"github.com/tektoncd/pipeline/pkg/remoteresolution/remote/resolution"
+	remoteresource "github.com/tektoncd/pipeline/pkg/remoteresolution/resource"
+	"github.com/tektoncd/pipeline/pkg/substitution"
 	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,8 +71,20 @@ func GetPipelineFunc(ctx context.Context, k8s kubernetes.Interface, tekton clien
 				stringReplacements[k] = v
 			}
 			replacedParams := pr.Params.ReplaceVariables(stringReplacements, arrayReplacements, objectReplacements)
-
-			resolver := resolution.NewResolver(requester, pipelineRun, string(pr.Resolver), "", "", replacedParams)
+			var url string
+			// The name is url-like so its not a local reference.
+			if err := v1.RefNameLikeUrl(pr.Name); err == nil {
+				// apply variable replacements in the name.
+				pr.Name = substitution.ApplyReplacements(pr.Name, stringReplacements)
+				url = pr.Name
+			}
+			resolverPayload := remoteresource.ResolverPayload{
+				ResolutionSpec: &resolutionV1beta1.ResolutionRequestSpec{
+					Params: replacedParams,
+					URL:    url,
+				},
+			}
+			resolver := resolution.NewResolver(requester, pipelineRun, string(pr.Resolver), resolverPayload)
 			return resolvePipeline(ctx, resolver, name, namespace, k8s, tekton, verificationPolicies)
 		}
 	default:
@@ -97,12 +111,12 @@ type LocalPipelineRefResolver struct {
 func (l *LocalPipelineRefResolver) GetPipeline(ctx context.Context, name string) (*v1.Pipeline, *v1.RefSource, *trustedresources.VerificationResult, error) {
 	// If we are going to resolve this reference locally, we need a namespace scope.
 	if l.Namespace == "" {
-		return nil, nil, nil, fmt.Errorf("Must specify namespace to resolve reference to pipeline %s", name)
+		return nil, nil, nil, fmt.Errorf("must specify namespace to resolve reference to pipeline %s", name)
 	}
 
 	pipeline, err := l.Tektonclient.TektonV1().Pipelines(l.Namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("tekton client cannot get pipeline %s from local cluster: %w", name, err)
 	}
 	return pipeline, nil, nil, nil
 }
@@ -115,11 +129,11 @@ func (l *LocalPipelineRefResolver) GetPipeline(ctx context.Context, name string)
 func resolvePipeline(ctx context.Context, resolver remote.Resolver, name string, namespace string, k8s kubernetes.Interface, tekton clientset.Interface, verificationPolicies []*v1alpha1.VerificationPolicy) (*v1.Pipeline, *v1.RefSource, *trustedresources.VerificationResult, error) {
 	obj, refSource, err := resolver.Get(ctx, "pipeline", name)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("resolver failed to get Pipeline %s: %w", name, err)
 	}
 	pipelineObj, vr, err := readRuntimeObjectAsPipeline(ctx, namespace, obj, k8s, tekton, refSource, verificationPolicies)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to read runtime object as Pipeline: %w", err)
 	}
 	return pipelineObj, refSource, vr, nil
 }
@@ -136,31 +150,47 @@ func resolvePipeline(ctx context.Context, resolver remote.Resolver, name string,
 func readRuntimeObjectAsPipeline(ctx context.Context, namespace string, obj runtime.Object, k8s kubernetes.Interface, tekton clientset.Interface, refSource *v1.RefSource, verificationPolicies []*v1alpha1.VerificationPolicy) (*v1.Pipeline, *trustedresources.VerificationResult, error) {
 	switch obj := obj.(type) {
 	case *v1beta1.Pipeline:
+		obj.SetDefaults(ctx)
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
 		// Verify the Pipeline once we fetch from the remote resolution, mutating, validation and conversion of the pipeline should happen after the verification, since signatures are based on the remote pipeline contents
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
 		// Issue a dry-run request to create the remote Pipeline, so that it can undergo validation from validating admission webhooks
-		// without actually creating the Pipeline on the cluster.
-		if err := apiserver.DryRunValidate(ctx, namespace, obj, tekton); err != nil {
+		// and mutation from mutating admission webhooks without actually creating the Pipeline on the cluster
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
 			return nil, nil, err
 		}
-		p := &v1.Pipeline{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Pipeline",
-				APIVersion: "tekton.dev/v1",
-			},
+		if mutatedPipeline, ok := o.(*v1beta1.Pipeline); ok {
+			mutatedPipeline.ObjectMeta = obj.ObjectMeta
+			p := &v1.Pipeline{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Pipeline",
+					APIVersion: "tekton.dev/v1",
+				},
+			}
+			if err := mutatedPipeline.ConvertTo(ctx, p); err != nil {
+				return nil, nil, fmt.Errorf("failed to convert v1beta1 obj %s into v1 Pipeline", mutatedPipeline.GetObjectKind().GroupVersionKind().String())
+			}
+			return p, &vr, nil
 		}
-		if err := obj.ConvertTo(ctx, p); err != nil {
-			return nil, nil, fmt.Errorf("failed to convert obj %s into Pipeline", obj.GetObjectKind().GroupVersionKind().String())
-		}
-		return p, &vr, nil
 	case *v1.Pipeline:
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
+		// This SetDefaults is currently not necessary, but for consistency, it is recommended to add it.
+		// Avoid forgetting to add it in the future when there is a v2 version, causing similar problems.
+		obj.SetDefaults(ctx)
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
-		// Issue a dry-run request to create the remote Pipeline, so that it can undergo validation from validating admission webhooks
-		// without actually creating the Pipeline on the cluster
-		if err := apiserver.DryRunValidate(ctx, namespace, obj, tekton); err != nil {
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
 			return nil, nil, err
 		}
-		return obj, &vr, nil
+		if mutatedPipeline, ok := o.(*v1.Pipeline); ok {
+			mutatedPipeline.ObjectMeta = obj.ObjectMeta
+			return mutatedPipeline, &vr, nil
+		}
 	}
 	return nil, nil, errors.New("resource is not a pipeline")
 }

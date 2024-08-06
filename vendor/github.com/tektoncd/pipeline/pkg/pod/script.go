@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -214,10 +215,10 @@ func encodeScript(script string) string {
 // placeDebugScriptInContainers inserts debug scripts into containers. It capsules those scripts to files in initContainer,
 // then executes those scripts in target containers.
 func placeDebugScriptInContainers(containers []corev1.Container, initContainer *corev1.Container) {
-	for i := 0; i < len(containers); i++ {
+	for i := range len(containers) {
 		debugInfoVolumeMount := corev1.VolumeMount{
 			Name:      debugInfoVolumeName,
-			MountPath: filepath.Join(debugInfoDir, fmt.Sprintf("%d", i)),
+			MountPath: filepath.Join(debugInfoDir, strconv.Itoa(i)),
 		}
 		(&containers[i]).VolumeMounts = append((&containers[i]).VolumeMounts, debugScriptsVolumeMount, debugInfoVolumeMount)
 	}

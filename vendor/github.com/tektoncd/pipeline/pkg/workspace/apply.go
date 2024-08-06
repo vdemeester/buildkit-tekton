@@ -21,14 +21,15 @@ import (
 	"fmt"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-	"github.com/tektoncd/pipeline/pkg/names"
+	pkgnames "github.com/tektoncd/pipeline/pkg/names"
 	"github.com/tektoncd/pipeline/pkg/substitution"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
-	volumeNameBase = "ws"
+	volumeNameBase      = "ws"
+	defaultRandomLength = 5
 )
 
 // nameVolumeMap is a map from a workspace's name to its Volume.
@@ -42,15 +43,31 @@ func (nvm nameVolumeMap) setVolumeSource(workspaceName string, volumeName string
 	}
 }
 
+// generateVolumeName generates a unique name for a volume based on the workspace name.
+func generateVolumeName(name string) string {
+	return pkgnames.GenerateHashedName(volumeNameBase, name, defaultRandomLength)
+}
+
 // CreateVolumes will return a dictionary where the keys are the names of the workspaces bound in
 // wb and the value is a newly-created Volume to use. If the same Volume is bound twice, the
 // resulting volumes will both have the same name to prevent the same Volume from being attached
-// to a pod twice. The names of the returned volumes will be a short random string starting "ws-".
+// to a pod twice. The names of the returned volumes will be a short hash string starting "ws-".
 func CreateVolumes(wb []v1.WorkspaceBinding) map[string]corev1.Volume {
 	pvcs := map[string]corev1.Volume{}
-	v := make(nameVolumeMap)
+	v := make(nameVolumeMap, len(wb))
+	// Track the names we've used so far to avoid collisions
+	usedNames := make(map[string]struct{}, len(wb))
+
 	for _, w := range wb {
-		name := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(volumeNameBase)
+		name := generateVolumeName(w.Name)
+
+		// If we've already generated this name, try appending extra characters until we find a unique name
+		for _, exists := usedNames[name]; exists; _, exists = usedNames[name] {
+			name = generateVolumeName(name + "$")
+		}
+		// Track the name we've used
+		usedNames[name] = struct{}{}
+
 		switch {
 		case w.PersistentVolumeClaim != nil:
 			// If it's a PVC, we need to check if we've encountered it before so we avoid mounting it twice
@@ -225,6 +242,10 @@ func findWorkspaceSubstitutionLocationsInSidecars(sidecars []v1.Sidecar) sets.St
 		for i := range sidecar.Command {
 			locationsToCheck.Insert(sidecar.Command[i])
 		}
+		locationsToCheck.Insert(sidecar.WorkingDir)
+		for _, e := range sidecar.Env {
+			locationsToCheck.Insert(e.Value)
+		}
 	}
 	return locationsToCheck
 }
@@ -241,6 +262,18 @@ func findWorkspaceSubstitutionLocationsInSteps(steps []v1.Step) sets.String {
 		for i := range step.Command {
 			locationsToCheck.Insert(step.Command[i])
 		}
+
+		locationsToCheck.Insert(step.WorkingDir)
+		for _, e := range step.Env {
+			locationsToCheck.Insert(e.Value)
+		}
+		for _, p := range step.Params {
+			locationsToCheck.Insert(p.Value.ArrayVal...)
+			for k := range p.Value.ObjectVal {
+				locationsToCheck.Insert(p.Value.ObjectVal[k])
+			}
+			locationsToCheck.Insert(p.Value.StringVal)
+		}
 	}
 	return locationsToCheck
 }
@@ -254,6 +287,11 @@ func findWorkspaceSubstitutionLocationsInStepTemplate(stepTemplate *v1.StepTempl
 		}
 		for i := range stepTemplate.Command {
 			locationsToCheck.Insert(stepTemplate.Command[i])
+		}
+
+		locationsToCheck.Insert(stepTemplate.WorkingDir)
+		for _, e := range stepTemplate.Env {
+			locationsToCheck.Insert(e.Value)
 		}
 	}
 	return locationsToCheck
@@ -274,4 +312,89 @@ func FindWorkspacesUsedByTask(ts v1.TaskSpec) (sets.String, error) {
 		workspacesUsedInSteps.Insert(workspacesUsed...)
 	}
 	return workspacesUsedInSteps, nil
+}
+
+// ReplaceWorkspaceBindingsVars returns a new slice of WorkspaceBinding with references to parameters replaced,
+// based on the mapping provided in replacements.
+func ReplaceWorkspaceBindingsVars(wbs []v1.WorkspaceBinding, replacements map[string]string) []v1.WorkspaceBinding {
+	for i := range wbs {
+		replaceWorkspaceBindingVars(&wbs[i], replacements)
+	}
+	return wbs
+}
+
+// replaceWorkspaceBindingVars returns a new WorkspaceBinding with references to parameters replaced,
+// based on the mapping provided in replacements.
+func replaceWorkspaceBindingVars(wb *v1.WorkspaceBinding, replacements map[string]string) *v1.WorkspaceBinding {
+	wb.SubPath = substitution.ApplyReplacements(wb.SubPath, replacements)
+	if wb.PersistentVolumeClaim != nil {
+		wb.PersistentVolumeClaim = applyPersistentVolumeClaimVolumeSource(wb.PersistentVolumeClaim, replacements)
+	}
+	if wb.ConfigMap != nil {
+		wb.ConfigMap = applyConfigMapVolumeSource(wb.ConfigMap, replacements)
+	}
+	if wb.Secret != nil {
+		wb.Secret = applySecretVolumeSource(wb.Secret, replacements)
+	}
+	if wb.Projected != nil {
+		for j, source := range wb.Projected.Sources {
+			if source.ConfigMap != nil {
+				wb.Projected.Sources[j].ConfigMap = applyConfigMapProjection(wb.Projected.Sources[j].ConfigMap, replacements)
+			}
+			if source.Secret != nil {
+				wb.Projected.Sources[j].Secret = applySecretProjection(wb.Projected.Sources[j].Secret, replacements)
+			}
+		}
+	}
+	if wb.CSI != nil {
+		wb.CSI = applyCSIVolumeSource(wb.CSI, replacements)
+	}
+	return wb
+}
+
+func applyPersistentVolumeClaimVolumeSource(pvc *corev1.PersistentVolumeClaimVolumeSource,
+	replacements map[string]string) *corev1.PersistentVolumeClaimVolumeSource {
+	pvc.ClaimName = substitution.ApplyReplacements(pvc.ClaimName, replacements)
+	return pvc
+}
+
+func applyConfigMapVolumeSource(cm *corev1.ConfigMapVolumeSource, replacements map[string]string) *corev1.ConfigMapVolumeSource {
+	cm.Name = substitution.ApplyReplacements(cm.Name, replacements)
+	cm.Items = applyKeyToPathItems(cm.Items, replacements)
+	return cm
+}
+
+func applySecretVolumeSource(s *corev1.SecretVolumeSource, replacements map[string]string) *corev1.SecretVolumeSource {
+	s.SecretName = substitution.ApplyReplacements(s.SecretName, replacements)
+	s.Items = applyKeyToPathItems(s.Items, replacements)
+	return s
+}
+
+func applyConfigMapProjection(cm *corev1.ConfigMapProjection, replacements map[string]string) *corev1.ConfigMapProjection {
+	cm.Name = substitution.ApplyReplacements(cm.Name, replacements)
+	cm.Items = applyKeyToPathItems(cm.Items, replacements)
+	return cm
+}
+
+func applySecretProjection(s *corev1.SecretProjection, replacements map[string]string) *corev1.SecretProjection {
+	s.Name = substitution.ApplyReplacements(s.Name, replacements)
+	s.Items = applyKeyToPathItems(s.Items, replacements)
+	return s
+}
+
+func applyCSIVolumeSource(csi *corev1.CSIVolumeSource, replacements map[string]string) *corev1.CSIVolumeSource {
+	csi.Driver = substitution.ApplyReplacements(csi.Driver, replacements)
+	if csi.NodePublishSecretRef != nil {
+		csi.NodePublishSecretRef.Name = substitution.ApplyReplacements(csi.NodePublishSecretRef.Name, replacements)
+	}
+	return csi
+}
+
+func applyKeyToPathItems(items []corev1.KeyToPath, replacements map[string]string) []corev1.KeyToPath {
+	for i := range items {
+		item := &items[i]
+		item.Key = substitution.ApplyReplacements(item.Key, replacements)
+		item.Path = substitution.ApplyReplacements(item.Path, replacements)
+	}
+	return items
 }

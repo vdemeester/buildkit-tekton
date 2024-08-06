@@ -124,9 +124,9 @@ var (
 // command, we must have fetched the image's ENTRYPOINT before calling this
 // method, using entrypoint_lookup.go.
 // Additionally, Step timeouts are added as entrypoint flag.
-func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1.TaskSpec, breakpointConfig *v1.TaskRunDebug, waitForReadyAnnotation, enableKeepPodOnCancel bool) ([]corev1.Container, error) {
+func orderContainers(ctx context.Context, commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1.TaskSpec, breakpointConfig *v1.TaskRunDebug, waitForReadyAnnotation, enableKeepPodOnCancel bool) ([]corev1.Container, error) {
 	if len(steps) == 0 {
-		return nil, errors.New("No steps specified")
+		return nil, errors.New("no steps specified")
 	}
 
 	for i, s := range steps {
@@ -149,6 +149,7 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 			"-termination_path", terminationPath,
 			"-step_metadata_dir", filepath.Join(RunDir, idx, "status"),
 		)
+
 		argsForEntrypoint = append(argsForEntrypoint, commonExtraEntrypointArgs...)
 		if taskSpec != nil {
 			if taskSpec.Steps != nil && len(taskSpec.Steps) >= i+1 {
@@ -167,6 +168,19 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 				}
 				if taskSpec.Steps[i].StderrConfig != nil {
 					argsForEntrypoint = append(argsForEntrypoint, "-stderr_path", taskSpec.Steps[i].StderrConfig.Path)
+				}
+				// add step results
+				stepResultArgs := stepResultArgument(taskSpec.Steps[i].Results)
+
+				argsForEntrypoint = append(argsForEntrypoint, stepResultArgs...)
+				if len(taskSpec.Steps[i].When) > 0 {
+					// marshal and pass to the entrypoint and unmarshal it there.
+					marshal, err := json.Marshal(taskSpec.Steps[i].When)
+
+					if err != nil {
+						return nil, fmt.Errorf("faile to resolve when %w", err)
+					}
+					argsForEntrypoint = append(argsForEntrypoint, "--when_expressions", string(marshal))
 				}
 			}
 			argsForEntrypoint = append(argsForEntrypoint, resultArgument(steps, taskSpec.Results)...)
@@ -199,6 +213,18 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 	return steps, nil
 }
 
+// stepResultArgument creates the cli arguments for step results to the entrypointer.
+func stepResultArgument(stepResults []v1.StepResult) []string {
+	if len(stepResults) == 0 {
+		return nil
+	}
+	stepResultNames := []string{}
+	for _, r := range stepResults {
+		stepResultNames = append(stepResultNames, r.Name)
+	}
+	return []string{"-step_results", strings.Join(stepResultNames, ",")}
+}
+
 func resultArgument(steps []corev1.Container, results []v1.TaskResult) []string {
 	if len(results) == 0 {
 		return nil
@@ -209,7 +235,9 @@ func resultArgument(steps []corev1.Container, results []v1.TaskResult) []string 
 func collectResultsName(results []v1.TaskResult) string {
 	var resultNames []string
 	for _, r := range results {
-		resultNames = append(resultNames, r.Name)
+		if r.Value == nil {
+			resultNames = append(resultNames, r.Name)
+		}
 	}
 	return strings.Join(resultNames, ",")
 }
@@ -320,12 +348,12 @@ func IsSidecarStatusRunning(tr *v1.TaskRun) bool {
 // represents a step.
 func IsContainerStep(name string) bool { return strings.HasPrefix(name, stepPrefix) }
 
-// isContainerSidecar returns true if the container name indicates that it
+// IsContainerSidecar returns true if the container name indicates that it
 // represents a sidecar.
-func isContainerSidecar(name string) bool { return strings.HasPrefix(name, sidecarPrefix) }
+func IsContainerSidecar(name string) bool { return strings.HasPrefix(name, sidecarPrefix) }
 
-// trimStepPrefix returns the container name, stripped of its step prefix.
-func trimStepPrefix(name string) string { return strings.TrimPrefix(name, stepPrefix) }
+// TrimStepPrefix returns the container name, stripped of its step prefix.
+func TrimStepPrefix(name string) string { return strings.TrimPrefix(name, stepPrefix) }
 
 // TrimSidecarPrefix returns the container name, stripped of its sidecar
 // prefix.
@@ -335,7 +363,12 @@ func TrimSidecarPrefix(name string) string { return strings.TrimPrefix(name, sid
 // returns "step-unnamed-<step-index>" if not specified
 func StepName(name string, i int) string {
 	if name != "" {
-		return fmt.Sprintf("%s%s", stepPrefix, name)
+		return GetContainerName(name)
 	}
 	return fmt.Sprintf("%sunnamed-%d", stepPrefix, i)
+}
+
+// GetContainerName prefixes the input name with "step-"
+func GetContainerName(name string) string {
+	return fmt.Sprintf("%s%s", stepPrefix, name)
 }

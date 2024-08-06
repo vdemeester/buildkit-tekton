@@ -25,23 +25,19 @@ import (
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	resolutionV1beta1 "github.com/tektoncd/pipeline/pkg/apis/resolution/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	"github.com/tektoncd/pipeline/pkg/reconciler/apiserver"
 	"github.com/tektoncd/pipeline/pkg/remote"
-	"github.com/tektoncd/pipeline/pkg/remote/resolution"
-	remoteresource "github.com/tektoncd/pipeline/pkg/resolution/resource"
+	"github.com/tektoncd/pipeline/pkg/remoteresolution/remote/resolution"
+	remoteresource "github.com/tektoncd/pipeline/pkg/remoteresolution/resource"
+	"github.com/tektoncd/pipeline/pkg/substitution"
 	"github.com/tektoncd/pipeline/pkg/trustedresources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/kmeta"
 )
-
-// This error is defined in etcd at
-// https://github.com/etcd-io/etcd/blob/5b226e0abf4100253c94bb71f47d6815877ed5a2/server/etcdserver/errors.go#L30
-// TODO: If/when https://github.com/kubernetes/kubernetes/issues/106491 is addressed,
-// we should stop relying on a hardcoded string.
-var errEtcdLeaderChange = "etcdserver: leader changed"
 
 // GetTaskKind returns the referenced Task kind (Task, ClusterTask, ...) if the TaskRun is using TaskRef.
 func GetTaskKind(taskrun *v1.TaskRun) v1.TaskKind {
@@ -52,8 +48,8 @@ func GetTaskKind(taskrun *v1.TaskRun) v1.TaskKind {
 	return kind
 }
 
-// GetTaskFuncFromTaskRun is a factory function that will use the given TaskRef as context to return a valid GetTask function. It
-// also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
+// GetTaskFuncFromTaskRun is a factory function that will use the given TaskRef as context to return a valid GetTask function.
+// It also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
 // cluster or authorize against an external repositroy. It will figure out whether it needs to look in the cluster or in
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 // OCI bundle and remote resolution tasks will be verified by trusted resources if the feature is enabled
@@ -78,13 +74,14 @@ func GetTaskFuncFromTaskRun(ctx context.Context, k8s kubernetes.Interface, tekto
 	return GetTaskFunc(ctx, k8s, tekton, requester, taskrun, taskrun.Spec.TaskRef, taskrun.Name, taskrun.Namespace, taskrun.Spec.ServiceAccountName, verificationPolicies)
 }
 
-// GetTaskFunc is a factory function that will use the given TaskRef as context to return a valid GetTask function. It
-// also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
+// GetTaskFunc is a factory function that will use the given TaskRef as context to return a valid GetTask function.
+// It also requires a kubeclient, tektonclient, namespace, and service account in case it needs to find that task in
 // cluster or authorize against an external repositroy. It will figure out whether it needs to look in the cluster or in
 // a remote image to fetch the  reference. It will also return the "kind" of the task being referenced.
 // OCI bundle and remote resolution tasks will be verified by trusted resources if the feature is enabled
 func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset.Interface, requester remoteresource.Requester,
-	owner kmeta.OwnerRefable, tr *v1.TaskRef, trName string, namespace, saName string, verificationPolicies []*v1alpha1.VerificationPolicy) GetTask {
+	owner kmeta.OwnerRefable, tr *v1.TaskRef, trName string, namespace, saName string, verificationPolicies []*v1alpha1.VerificationPolicy,
+) GetTask {
 	kind := v1.NamespacedTaskKind
 	if tr != nil && tr.Kind != "" {
 		kind = tr.Kind
@@ -96,8 +93,9 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 		// casting it to a TaskObject.
 		return func(ctx context.Context, name string) (*v1.Task, *v1.RefSource, *trustedresources.VerificationResult, error) {
 			var replacedParams v1.Params
+			var url string
 			if ownerAsTR, ok := owner.(*v1.TaskRun); ok {
-				stringReplacements, arrayReplacements := paramsFromTaskRun(ctx, ownerAsTR)
+				stringReplacements, arrayReplacements, _ := replacementsFromParams(ownerAsTR.Spec.Params)
 				for k, v := range getContextReplacements("", ownerAsTR) {
 					stringReplacements[k] = v
 				}
@@ -105,10 +103,23 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 					p.Value.ApplyReplacements(stringReplacements, arrayReplacements, nil)
 					replacedParams = append(replacedParams, p)
 				}
+				if err := v1.RefNameLikeUrl(tr.Name); err == nil {
+					// The name is url-like so its not a local reference.
+					tr.Name = substitution.ApplyReplacements(tr.Name, stringReplacements)
+					url = tr.Name
+				}
 			} else {
 				replacedParams = append(replacedParams, tr.Params...)
 			}
-			resolver := resolution.NewResolver(requester, owner, string(tr.Resolver), trName, namespace, replacedParams)
+			resolverPayload := remoteresource.ResolverPayload{
+				Name:      trName,
+				Namespace: namespace,
+				ResolutionSpec: &resolutionV1beta1.ResolutionRequestSpec{
+					Params: replacedParams,
+					URL:    url,
+				},
+			}
+			resolver := resolution.NewResolver(requester, owner, string(tr.Resolver), resolverPayload)
 			return resolveTask(ctx, resolver, name, namespace, kind, k8s, tekton, verificationPolicies)
 		}
 
@@ -121,6 +132,78 @@ func GetTaskFunc(ctx context.Context, k8s kubernetes.Interface, tekton clientset
 		}
 		return local.GetTask
 	}
+}
+
+// GetStepActionFunc is a factory function that will use the given Ref as context to return a valid GetStepAction function.
+// It also requires a kubeclient, tektonclient, requester in case it needs to find that task in
+// cluster or authorize against an external repository. It will figure out whether it needs to look in the cluster or in
+// a remote location to fetch the reference.
+func GetStepActionFunc(tekton clientset.Interface, k8s kubernetes.Interface, requester remoteresource.Requester, tr *v1.TaskRun, step *v1.Step) GetStepAction {
+	trName := tr.Name
+	namespace := tr.Namespace
+	if step.Ref != nil && step.Ref.Resolver != "" && requester != nil {
+		// Return an inline function that implements GetStepAction by calling Resolver.Get with the specified StepAction type and
+		// casting it to a StepAction.
+		return func(ctx context.Context, name string) (*v1beta1.StepAction, *v1.RefSource, error) {
+			// Perform params replacements for StepAction resolver params
+			ApplyParameterSubstitutionInResolverParams(tr, step)
+			resolverPayload := remoteresource.ResolverPayload{
+				Name:      trName,
+				Namespace: namespace,
+				ResolutionSpec: &resolutionV1beta1.ResolutionRequestSpec{
+					Params: step.Ref.Params,
+					URL:    step.Ref.Name,
+				},
+			}
+			resolver := resolution.NewResolver(requester, tr, string(step.Ref.Resolver), resolverPayload)
+			return resolveStepAction(ctx, resolver, name, namespace, k8s, tekton)
+		}
+	}
+	local := &LocalStepActionRefResolver{
+		Namespace:    namespace,
+		Tektonclient: tekton,
+	}
+	return local.GetStepAction
+}
+
+// ApplyParameterSubstitutionInResolverParams applies parameter substitutions in resolver params for Step Ref.
+func ApplyParameterSubstitutionInResolverParams(tr *v1.TaskRun, step *v1.Step) {
+	stringReplacements := make(map[string]string)
+	arrayReplacements := make(map[string][]string)
+	objectReplacements := make(map[string]map[string]string)
+	if tr.Spec.TaskSpec != nil {
+		defaultSR, defaultAR, defaultOR := replacementsFromDefaultParams(tr.Spec.TaskSpec.Params)
+		stringReplacements, arrayReplacements, objectReplacements = extendReplacements(stringReplacements, arrayReplacements, objectReplacements, defaultSR, defaultAR, defaultOR)
+	}
+	paramSR, paramAR, paramOR := replacementsFromParams(tr.Spec.Params)
+	stringReplacements, arrayReplacements, objectReplacements = extendReplacements(stringReplacements, arrayReplacements, objectReplacements, paramSR, paramAR, paramOR)
+	step.Ref.Params = step.Ref.Params.ReplaceVariables(stringReplacements, arrayReplacements, objectReplacements)
+}
+
+func extendReplacements(stringReplacements map[string]string, arrayReplacements map[string][]string, objectReplacements map[string]map[string]string, stringReplacementsToAdd map[string]string, arrayReplacementsToAdd map[string][]string, objectReplacementsToAdd map[string]map[string]string) (map[string]string, map[string][]string, map[string]map[string]string) {
+	for k, v := range stringReplacementsToAdd {
+		stringReplacements[k] = v
+	}
+	for k, v := range arrayReplacementsToAdd {
+		arrayReplacements[k] = v
+	}
+	objectReplacements = extendObjectReplacements(objectReplacements, objectReplacementsToAdd)
+	return stringReplacements, arrayReplacements, objectReplacements
+}
+
+func extendObjectReplacements(objectReplacements map[string]map[string]string, objectReplacementsToAdd map[string]map[string]string) map[string]map[string]string {
+	for k, v := range objectReplacementsToAdd {
+		for key, val := range v {
+			if objectReplacements != nil {
+				if objectReplacements[k] != nil {
+					objectReplacements[k][key] = val
+				} else {
+					objectReplacements[k] = v
+				}
+			}
+		}
+	}
+	return objectReplacements
 }
 
 // resolveTask accepts an impl of remote.Resolver and attempts to
@@ -142,6 +225,51 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name, namespace 
 	return taskObj, refSource, vr, nil
 }
 
+func resolveStepAction(ctx context.Context, resolver remote.Resolver, name, namespace string, k8s kubernetes.Interface, tekton clientset.Interface) (*v1beta1.StepAction, *v1.RefSource, error) {
+	obj, refSource, err := resolver.Get(ctx, "StepAction", name)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch obj := obj.(type) {
+	case *v1beta1.StepAction:
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
+			return nil, nil, err
+		}
+		if mutatedStepAction, ok := o.(*v1beta1.StepAction); ok {
+			mutatedStepAction.ObjectMeta = obj.ObjectMeta
+			return mutatedStepAction, refSource, nil
+		}
+	case *v1alpha1.StepAction:
+		obj.SetDefaults(ctx)
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
+			return nil, nil, err
+		}
+		if mutatedStepAction, ok := o.(*v1alpha1.StepAction); ok {
+			mutatedStepAction.ObjectMeta = obj.ObjectMeta
+			v1BetaStepAction := v1beta1.StepAction{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "StepAction",
+					APIVersion: "tekton.dev/v1beta1",
+				},
+			}
+			err := mutatedStepAction.ConvertTo(ctx, &v1BetaStepAction)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &v1BetaStepAction, refSource, nil
+		}
+	}
+	return nil, nil, errors.New("resource is not a StepAction")
+}
+
 // readRuntimeObjectAsTask tries to convert a generic runtime.Object
 // into a *v1.Task type so that its meta and spec fields
 // can be read. v1beta1 object will be converted to v1 and returned.
@@ -154,39 +282,68 @@ func resolveTask(ctx context.Context, resolver remote.Resolver, name, namespace 
 func readRuntimeObjectAsTask(ctx context.Context, namespace string, obj runtime.Object, k8s kubernetes.Interface, tekton clientset.Interface, refSource *v1.RefSource, verificationPolicies []*v1alpha1.VerificationPolicy) (*v1.Task, *trustedresources.VerificationResult, error) {
 	switch obj := obj.(type) {
 	case *v1beta1.Task:
+		obj.SetDefaults(ctx)
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
 		// Verify the Task once we fetch from the remote resolution, mutating, validation and conversion of the task should happen after the verification, since signatures are based on the remote task contents
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
 		// without actually creating the Task on the cluster.
-		if err := apiserver.DryRunValidate(ctx, namespace, obj, tekton); err != nil {
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
 			return nil, nil, err
 		}
-		t := &v1.Task{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Task",
-				APIVersion: "tekton.dev/v1",
-			},
+		if mutatedTask, ok := o.(*v1beta1.Task); ok {
+			t := &v1.Task{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Task",
+					APIVersion: "tekton.dev/v1",
+				},
+			}
+			mutatedTask.ObjectMeta = obj.ObjectMeta
+			if err := mutatedTask.ConvertTo(ctx, t); err != nil {
+				return nil, nil, fmt.Errorf("failed to convert obj %s into Pipeline", mutatedTask.GetObjectKind().GroupVersionKind().String())
+			}
+			return t, &vr, nil
 		}
-		if err := obj.ConvertTo(ctx, t); err != nil {
-			return nil, nil, fmt.Errorf("failed to convert obj %s into Pipeline", obj.GetObjectKind().GroupVersionKind().String())
-		}
-		return t, &vr, nil
 	case *v1beta1.ClusterTask:
+		obj.SetDefaults(ctx)
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
 		t, err := convertClusterTaskToTask(ctx, *obj)
+		if err != nil {
+			return nil, nil, err
+		}
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
 		// without actually creating the Task on the cluster
-		if err := apiserver.DryRunValidate(ctx, namespace, t, tekton); err != nil {
+		o, err := apiserver.DryRunValidate(ctx, namespace, t, tekton)
+		if err != nil {
 			return nil, nil, err
 		}
-		return t, nil, err
+		if mutatedTask, ok := o.(*v1.Task); ok {
+			mutatedTask.ObjectMeta = obj.ObjectMeta
+			return mutatedTask, nil, nil
+		}
 	case *v1.Task:
+		// This SetDefaults is currently not necessary, but for consistency, it is recommended to add it.
+		// Avoid forgetting to add it in the future when there is a v2 version, causing similar problems.
+		obj.SetDefaults(ctx)
+		// Cleanup object from things we don't care about
+		// FIXME: extract this in a function
+		obj.ObjectMeta.OwnerReferences = nil
 		vr := trustedresources.VerifyResource(ctx, obj, k8s, refSource, verificationPolicies)
 		// Issue a dry-run request to create the remote Task, so that it can undergo validation from validating admission webhooks
 		// without actually creating the Task on the cluster
-		if err := apiserver.DryRunValidate(ctx, namespace, obj, tekton); err != nil {
+		o, err := apiserver.DryRunValidate(ctx, namespace, obj, tekton)
+		if err != nil {
 			return nil, nil, err
 		}
-		return obj, &vr, nil
+		if mutatedTask, ok := o.(*v1.Task); ok {
+			mutatedTask.ObjectMeta = obj.ObjectMeta
+			return mutatedTask, &vr, nil
+		}
 	}
 	return nil, nil, errors.New("resource is not a task")
 }
@@ -222,9 +379,24 @@ func (l *LocalTaskRefResolver) GetTask(ctx context.Context, name string) (*v1.Ta
 	return task, nil, nil, nil
 }
 
-// IsGetTaskErrTransient returns true if an error returned by GetTask is retryable.
-func IsGetTaskErrTransient(err error) bool {
-	return strings.Contains(err.Error(), errEtcdLeaderChange)
+// LocalStepActionRefResolver uses the current cluster to resolve a StepAction reference.
+type LocalStepActionRefResolver struct {
+	Namespace    string
+	Tektonclient clientset.Interface
+}
+
+// GetStepAction will resolve a StepAction from the local cluster using a versioned Tekton client.
+// It will return an error if it can't find an appropriate StepAction for any reason.
+func (l *LocalStepActionRefResolver) GetStepAction(ctx context.Context, name string) (*v1beta1.StepAction, *v1.RefSource, error) {
+	// If we are going to resolve this reference locally, we need a namespace scope.
+	if l.Namespace == "" {
+		return nil, nil, fmt.Errorf("must specify namespace to resolve reference to step action %s", name)
+	}
+	stepAction, err := l.Tektonclient.TektonV1beta1().StepActions(l.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return stepAction, nil, nil
 }
 
 // convertClusterTaskToTask converts deprecated v1beta1 ClusterTasks to Tasks for
@@ -237,10 +409,12 @@ func convertClusterTaskToTask(ctx context.Context, ct v1beta1.ClusterTask) (*v1.
 			Kind:       "Task",
 			APIVersion: "tekton.dev/v1beta1",
 		},
+		// We need to keep ObjectMeta to keep consistent with the existing Task logic.
+		// TaskRun will inherit the original Annotations and Labels information.
+		ObjectMeta: ct.ObjectMeta,
 	}
 
 	t.Spec = ct.Spec
-	t.ObjectMeta.Name = ct.ObjectMeta.Name
 
 	v1Task := &v1.Task{
 		TypeMeta: metav1.TypeMeta{

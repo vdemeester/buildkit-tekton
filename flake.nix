@@ -25,7 +25,7 @@
           pkgs = nixpkgsFor.${system};
         in
         {
-          buildkit-tekton = pkgs.buildGo120Module {
+          buildkit-tekton = pkgs.buildGoModule {
             pname = "buildkit-tekton";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree
@@ -36,7 +36,7 @@
             # We use vendor, no need for vendorHash
             vendorHash = null;
           };
-          tkn-local = pkgs.buildGo121Module {
+          tkn-local = pkgs.buildGoModule {
             pname = "tkn-local";
             inherit version;
             # In 'nix develop', we don't need a copy of the source tree

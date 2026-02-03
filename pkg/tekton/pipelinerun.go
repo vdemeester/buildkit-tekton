@@ -152,7 +152,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 			d := t.Timeout.Duration
 			taskTimeout = &d
 		}
-		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces, taskTimeout)
+		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces, taskTimeout, r.configs, r.secrets)
 		if err != nil {
 			return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to llb")
 		}
@@ -228,7 +228,7 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 				d := t.Timeout.Duration
 				taskTimeout = &d
 			}
-			steps, err := taskSpecToPSteps(ctx, c, ts, "finally/"+t.Name, taskWorkspaces, taskTimeout)
+			steps, err := taskSpecToPSteps(ctx, c, ts, "finally/"+t.Name, taskWorkspaces, taskTimeout, r.configs, r.secrets)
 			if err != nil {
 				return llb.State{}, errors.Wrap(err, "couldn't translate Finally TaskSpec to llb")
 			}

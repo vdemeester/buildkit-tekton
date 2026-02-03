@@ -79,7 +79,7 @@ func TaskRunToLLB(ctx context.Context, c client.Client, r TaskRun) (llb.State, e
 			},
 		)
 	}
-	steps, err := taskSpecToPSteps(ctx, c, spec, tr.Name, workspaces)
+	steps, err := taskSpecToPSteps(ctx, c, spec, tr.Name, workspaces, nil)
 	if err != nil {
 		return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to builtkit llb")
 	}
@@ -127,7 +127,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1.TaskRun, ts *v1.TaskSp
 	return *ts, nil
 }
 
-func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name string, workspaces []mountOptionFn) ([]pstep, error) {
+func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name string, workspaces []mountOptionFn, taskTimeout *time.Duration) ([]pstep, error) {
 	steps := make([]pstep, len(t.Steps))
 	cacheDirName := name + "/results"
 	mergedSteps, err := v1.MergeStepsWithStepTemplate(t.StepTemplate, t.Steps)
@@ -154,10 +154,14 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name 
 		continueOnError := step.OnError == v1.Continue
 
 		// Get step timeout as time.Duration pointer
+		// If step has its own timeout, use it; otherwise fall back to task timeout
 		var stepTimeout *time.Duration
 		if step.Timeout != nil {
 			d := step.Timeout.Duration
 			stepTimeout = &d
+		} else if taskTimeout != nil {
+			// Use task timeout as fallback for steps without their own timeout
+			stepTimeout = taskTimeout
 		}
 
 		runOptions := []llb.RunOption{

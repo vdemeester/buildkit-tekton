@@ -1,5 +1,44 @@
 # Release History
 
+## 1.3.1 (2025-02-13)
+
+### Other Changes
+* Upgraded dependencies
+
+## 1.3.0 (2024-11-06)
+
+### Features Added
+* Added API Version support. Users can now change the default API Version by setting ClientOptions.APIVersioncd 
+
+## 1.2.0 (2024-10-21)
+
+### Features Added
+* Add CAE support
+* Client requests tokens from the Vault's tenant, overriding any credential default
+  (thanks @francescomari)
+
+## 1.1.0 (2024-02-13)
+
+### Other Changes
+* Upgraded to API service version `7.5`
+* Upgraded dependencies
+
+## 1.1.0-beta.2 (2023-11-08)
+
+### Features Added
+* Added the `HSMPlatform` field to the `KeyAttributes` struct
+
+### Other Changes
+* Upgraded service version to `7.5-preview.1`
+* Updated to latest version of `azcore`.
+* Fixed value of `otel.library.name` in traces.
+
+## 1.1.0-beta.1 (2023-10-11)
+
+### Features Added
+
+* Enabled spans for distributed tracing.
+
 ## 1.0.1 (2023-08-23)
 
 ### Other Changes

@@ -169,7 +169,11 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 }
 
 func applyPipelineRunSubstitution(ctx context.Context, pr *v1.PipelineRun, ps *v1.PipelineSpec, pipelineName string) (v1.PipelineSpec, error) {
-	ps = resources.ApplyParameters(ctx, ps, pr)
+	var err error
+	ps, err = resources.ApplyParameters(ps, pr)
+	if err != nil {
+		return v1.PipelineSpec{}, err
+	}
 	ps = resources.ApplyContexts(ps, pipelineName, pr)
 	ps = resources.ApplyWorkspaces(ps, pr)
 

@@ -17,9 +17,21 @@ limitations under the License.
 package common
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/tektoncd/pipeline/pkg/reconciler/apiserver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
+
+// This error is defined in etcd at
+// https://github.com/etcd-io/etcd/blob/5b226e0abf4100253c94bb71f47d6815877ed5a2/server/etcdserver/errors.go#L30
+// TODO: If/when https://github.com/kubernetes/kubernetes/issues/106491 is addressed,
+// we should stop relying on a hardcoded string.
+var errEtcdLeaderChange = "etcdserver: leader changed"
 
 // Error embeds both a short machine-readable string reason for resolution
 // problems alongside the original error generated during the resolution flow.
@@ -50,16 +62,9 @@ func NewError(reason string, err error) *Error {
 	}
 }
 
-var (
-	// ErrRequestInProgress is a sentinel value to indicate that
-	// a resource request is still in progress.
-	ErrRequestInProgress = NewError("RequestInProgress", errors.New("Resource request is still in-progress"))
-
-	// ErrorRequestInProgress is an alias to ErrRequestInProgress
-	//
-	// Deprecated: use ErrRequestInProgress instead.
-	ErrorRequestInProgress = ErrRequestInProgress
-)
+// ErrRequestInProgress is a sentinel value to indicate that
+// a resource request is still in progress.
+var ErrRequestInProgress = NewError("RequestInProgress", errors.New("Resource request is still in-progress"))
 
 // InvalidResourceKeyError indicates that a string key given to the
 // Reconcile function does not match the expected "name" or "namespace/name"
@@ -68,11 +73,6 @@ type InvalidResourceKeyError struct {
 	Key      string
 	Original error
 }
-
-// ErrorInvalidResourceKey is an alias to type InvalidResourceKeyError.
-//
-// Deprecated: use type InvalidResourceKeyError instead.
-type ErrorInvalidResourceKey = InvalidResourceKeyError
 
 var _ error = &InvalidResourceKeyError{}
 
@@ -93,11 +93,6 @@ type InvalidRequestError struct {
 	Message              string
 }
 
-// ErrorInvalidRequest is an alias to type InvalidRequestError.
-//
-// Deprecated: use type InvalidRequestError instead.
-type ErrorInvalidRequest = InvalidRequestError
-
 var _ error = &InvalidRequestError{}
 
 func (e *InvalidRequestError) Error() string {
@@ -111,11 +106,6 @@ type GetResourceError struct {
 	Key          string
 	Original     error
 }
-
-// ErrorGettingResource is an alias to type GetResourceError.
-//
-// Deprecated: use type GetResourceError instead.
-type ErrorGettingResource = GetResourceError
 
 var _ error = &GetResourceError{}
 
@@ -134,11 +124,6 @@ type UpdatingRequestError struct {
 	ResolutionRequestKey string
 	Original             error
 }
-
-// ErrorUpdatingRequest is an alias to UpdatingRequestError
-//
-// Deprecated: use UpdatingRequestError instead.
-type ErrorUpdatingRequest = UpdatingRequestError
 
 var _ error = &UpdatingRequestError{}
 
@@ -164,4 +149,16 @@ func ReasonError(err error) (string, error) {
 	}
 
 	return reason, resolutionError
+}
+
+// IsErrTransient returns true if an error returned by GetTask/GetStepAction is retryable.
+func IsErrTransient(err error) bool {
+	switch {
+	case apierrors.IsConflict(err), apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err), errors.Is(err, apiserver.ErrCouldntValidateObjectRetryable):
+		return true
+	default:
+		return slices.ContainsFunc([]string{errEtcdLeaderChange, context.DeadlineExceeded.Error()}, func(s string) bool {
+			return strings.Contains(err.Error(), s)
+		})
+	}
 }

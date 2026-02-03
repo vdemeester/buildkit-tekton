@@ -19,7 +19,7 @@ limitations under the License.
 package externalversions
 
 import (
-	"fmt"
+	fmt "fmt"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	v1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
@@ -73,14 +73,14 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1alpha1().VerificationPolicies().Informer()}, nil
 
 		// Group=tekton.dev, Version=v1beta1
-	case v1beta1.SchemeGroupVersion.WithResource("clustertasks"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().ClusterTasks().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("customruns"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().CustomRuns().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("pipelines"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().Pipelines().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("pipelineruns"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().PipelineRuns().Informer()}, nil
+	case v1beta1.SchemeGroupVersion.WithResource("stepactions"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().StepActions().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("tasks"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Tekton().V1beta1().Tasks().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("taskruns"):

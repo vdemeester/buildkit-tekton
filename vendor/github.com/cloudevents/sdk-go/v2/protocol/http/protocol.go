@@ -70,6 +70,18 @@ type Protocol struct {
 	// If 0, DefaultShutdownTimeout is used.
 	ShutdownTimeout time.Duration
 
+	// readTimeout defines the http.Server ReadTimeout It is the maximum duration
+	// for reading the entire request, including the body. If not overwritten by an
+	// option, the default value (600s) is used
+	readTimeout *time.Duration
+
+	// writeTimeout defines the http.Server WriteTimeout It is the maximum duration
+	// before timing out writes of the response. It is reset whenever a new
+	// request's header is read. Like ReadTimeout, it does not let Handlers make
+	// decisions on a per-request basis. If not overwritten by an option, the
+	// default value (600s) is used
+	writeTimeout *time.Duration
+
 	// Port is the port configured to bind the receiver to. Defaults to 8080.
 	// If you want to know the effective port you're listening to, use GetListeningPort()
 	Port int
@@ -102,7 +114,10 @@ func New(opts ...Option) (*Protocol, error) {
 	}
 
 	if p.Client == nil {
-		p.Client = http.DefaultClient
+		// This is how http.DefaultClient is initialized. We do not just use
+		// that because when WithRoundTripper is used, it will change the client's
+		// transport, which would cause that transport to be used process-wide.
+		p.Client = &http.Client{}
 	}
 
 	if p.roundTripper != nil {
@@ -111,6 +126,17 @@ func New(opts ...Option) (*Protocol, error) {
 
 	if p.ShutdownTimeout == 0 {
 		p.ShutdownTimeout = DefaultShutdownTimeout
+	}
+
+	// use default timeout from abuse protection value
+	defaultTimeout := DefaultTimeout
+
+	if p.readTimeout == nil {
+		p.readTimeout = &defaultTimeout
+	}
+
+	if p.writeTimeout == nil {
+		p.writeTimeout = &defaultTimeout
 	}
 
 	if p.isRetriableFunc == nil {
@@ -300,7 +326,7 @@ func (p *Protocol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	if !ok {
 		rw.Header().Add("Retry-After", strconv.Itoa(int(reset)))
-		http.Error(rw, "limit exceeded", 429)
+		http.Error(rw, "limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 

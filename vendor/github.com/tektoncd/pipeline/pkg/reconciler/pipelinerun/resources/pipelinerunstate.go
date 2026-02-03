@@ -19,12 +19,14 @@ package resources
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipeline/dag"
+	"github.com/tektoncd/pipeline/pkg/substitution"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +43,7 @@ const (
 	PipelineTaskStatusPrefix = "tasks."
 	// PipelineTaskStatusSuffix is a suffix of the param representing execution state of pipelineTask
 	PipelineTaskStatusSuffix = ".status"
+	PipelineTaskReasonSuffix = ".reason"
 )
 
 // PipelineRunState is a slice of ResolvedPipelineRunTasks the represents the current execution
@@ -67,6 +70,12 @@ type PipelineRunFacts struct {
 	// The skip data is sensitive to changes in the state. The ResetSkippedCache method
 	// can be used to clean the cache and force re-computation when needed.
 	SkipCache map[string]TaskSkipStatus
+
+	// ValidationFailedTask are the tasks for which taskrun is not created as they
+	// never got added to the execution i.e. they failed in the validation step. One of
+	// the case of failing at the validation is during CheckMissingResultReferences method
+	// Tasks in ValidationFailedTask is added in method runNextSchedulableTask
+	ValidationFailedTask []*ResolvedPipelineTask
 }
 
 // PipelineRunTimeoutsState records information about start times and timeouts for the PipelineRun, so that the PipelineRunFacts
@@ -88,12 +97,16 @@ type pipelineRunStatusCount struct {
 	Succeeded int
 	// failed tasks count
 	Failed int
+	// failed but ignored tasks count
+	IgnoredFailed int
 	// cancelled tasks count
 	Cancelled int
 	// number of tasks which are still pending, have not executed
 	Incomplete int
 	// count of tasks skipped due to the relevant timeout having elapsed before the task is launched
 	SkippedDueToTimeout int
+	// count of validation failed task and taskrun not created
+	ValidationFailed int
 }
 
 // ResetSkippedCache resets the skipped cache in the facts map
@@ -110,10 +123,10 @@ func (state PipelineRunState) ToMap() map[string]*ResolvedPipelineTask {
 	return m
 }
 
-// IsBeforeFirstTaskRun returns true if the PipelineRun has not yet started its first TaskRun
+// IsBeforeFirstTaskRun returns true if the PipelineRun has not yet started its first child PipelineRun/TaskRun/CustomRun
 func (state PipelineRunState) IsBeforeFirstTaskRun() bool {
 	for _, t := range state {
-		if len(t.CustomRuns) > 0 || len(t.TaskRuns) > 0 {
+		if len(t.ChildPipelineRuns) > 0 || len(t.CustomRuns) > 0 || len(t.TaskRuns) > 0 {
 			return false
 		}
 	}
@@ -131,18 +144,26 @@ func (state PipelineRunState) IsBeforeFirstTaskRun() bool {
 func (state PipelineRunState) AdjustStartTime(unadjustedStartTime *metav1.Time) *metav1.Time {
 	adjustedStartTime := unadjustedStartTime
 	for _, rpt := range state {
+		for _, childPipelineRun := range rpt.ChildPipelineRuns {
+			if childPipelineRun.CreationTimestamp.Time.Before(adjustedStartTime.Time) {
+				adjustedStartTime = &childPipelineRun.CreationTimestamp
+			}
+		}
+
 		for _, customRun := range rpt.CustomRuns {
 			creationTime := customRun.GetObjectMeta().GetCreationTimestamp()
 			if creationTime.Time.Before(adjustedStartTime.Time) {
 				adjustedStartTime = &creationTime
 			}
 		}
+
 		for _, taskRun := range rpt.TaskRuns {
 			if taskRun.CreationTimestamp.Time.Before(adjustedStartTime.Time) {
 				adjustedStartTime = &taskRun.CreationTimestamp
 			}
 		}
 	}
+
 	return adjustedStartTime.DeepCopy()
 }
 
@@ -151,6 +172,9 @@ func (state PipelineRunState) AdjustStartTime(unadjustedStartTime *metav1.Time) 
 func (state PipelineRunState) GetTaskRunsResults() map[string][]v1.TaskRunResult {
 	results := make(map[string][]v1.TaskRunResult)
 	for _, rpt := range state {
+		if rpt.IsChildPipeline() {
+			continue
+		}
 		if rpt.IsCustomTask() {
 			continue
 		}
@@ -164,6 +188,33 @@ func (state PipelineRunState) GetTaskRunsResults() map[string][]v1.TaskRunResult
 			}
 		} else {
 			results[rpt.PipelineTask.Name] = rpt.TaskRuns[0].Status.Results
+		}
+	}
+	return results
+}
+
+// GetTaskRunsArtifacts returns a map of all successfully completed TaskRuns in the state, with the pipeline task name as
+// the key and the artifacts from the corresponding TaskRun as the value. It only includes tasks which have completed successfully.
+func (state PipelineRunState) GetTaskRunsArtifacts() map[string]*v1.Artifacts {
+	results := make(map[string]*v1.Artifacts)
+	for _, rpt := range state {
+		if rpt.IsChildPipeline() {
+			continue
+		}
+		if rpt.IsCustomTask() {
+			continue
+		}
+		if !rpt.isSuccessful() {
+			continue
+		}
+		if rpt.PipelineTask.IsMatrixed() {
+			var ars v1.Artifacts
+			for _, tr := range rpt.TaskRuns {
+				ars.Merge(tr.Status.Artifacts)
+			}
+			results[rpt.PipelineTask.Name] = &ars
+		} else {
+			results[rpt.PipelineTask.Name] = rpt.TaskRuns[0].Status.Artifacts
 		}
 	}
 	return results
@@ -209,12 +260,12 @@ func (state PipelineRunState) GetRunsResults() map[string][]v1beta1.CustomRunRes
 }
 
 // GetChildReferences returns a slice of references, including version, kind, name, and pipeline task name, for all
-// TaskRuns and Runs in the state.
+// child PipelineRuns, TaskRuns and Runs in the state.
 func (facts *PipelineRunFacts) GetChildReferences() []v1.ChildStatusReference {
 	var childRefs []v1.ChildStatusReference
 
 	for _, rpt := range facts.State {
-		// try to replace the parameters of the reference result of whenexpression in the taskrun that has ended
+		// try to replace the parameters of the reference result of when expression in the TaskRun that has ended
 		if rpt.isDone(facts) {
 			resolvedResultRefs, _, err := ResolveResultRefs(facts.State, PipelineRunState{rpt})
 			if err == nil {
@@ -223,6 +274,12 @@ func (facts *PipelineRunFacts) GetChildReferences() []v1.ChildStatusReference {
 		}
 
 		switch {
+		case len(rpt.ChildPipelineRuns) != 0:
+			for _, childPipelineRun := range rpt.ChildPipelineRuns {
+				if childPipelineRun != nil {
+					childRefs = append(childRefs, rpt.getChildRefForChildPipelineRun(childPipelineRun))
+				}
+			}
 		case len(rpt.TaskRuns) != 0:
 			for _, taskRun := range rpt.TaskRuns {
 				if taskRun != nil {
@@ -238,8 +295,75 @@ func (facts *PipelineRunFacts) GetChildReferences() []v1.ChildStatusReference {
 	return childRefs
 }
 
+func (t *ResolvedPipelineTask) getDisplayName(pipelineRun *v1.PipelineRun, customRun *v1beta1.CustomRun, taskRun *v1.TaskRun, c v1.ChildStatusReference) v1.ChildStatusReference {
+	replacements := make(map[string]string)
+	if pipelineRun != nil {
+		for _, p := range pipelineRun.Spec.Params {
+			if p.Value.Type == v1.ParamTypeString {
+				replacements[fmt.Sprintf("%s.%s", v1.ParamsPrefix, p.Name)] = p.Value.StringVal
+			}
+		}
+	}
+
+	if taskRun != nil {
+		for _, p := range taskRun.Spec.Params {
+			if p.Value.Type == v1.ParamTypeString {
+				replacements[fmt.Sprintf("%s.%s", v1.ParamsPrefix, p.Name)] = p.Value.StringVal
+			}
+		}
+	}
+
+	if customRun != nil {
+		for _, p := range customRun.Spec.Params {
+			if p.Value.Type == v1beta1.ParamTypeString {
+				replacements[fmt.Sprintf("%s.%s", v1.ParamsPrefix, p.Name)] = p.Value.StringVal
+			}
+		}
+	}
+
+	if t.PipelineTask.DisplayName != "" {
+		c.DisplayName = substitution.ApplyReplacements(t.PipelineTask.DisplayName, replacements)
+	}
+	if t.PipelineTask.Matrix != nil {
+		var dn string
+		for _, i := range t.PipelineTask.Matrix.Include {
+			if i.Name == "" {
+				continue
+			}
+			match := true
+			for _, ip := range i.Params {
+				v, ok := replacements[fmt.Sprintf("%s.%s", v1.ParamsPrefix, ip.Name)]
+				if !ok || (ip.Value.Type == v1.ParamTypeString && ip.Value.StringVal != v) {
+					match = false
+					break
+				}
+			}
+			if match {
+				dn = fmt.Sprintf("%s %s", dn, substitution.ApplyReplacements(i.Name, replacements))
+			}
+		}
+		if dn != "" {
+			c.DisplayName = strings.TrimSpace(dn)
+		}
+	}
+	return c
+}
+
+func (t *ResolvedPipelineTask) getChildRefForChildPipelineRun(pipelineRun *v1.PipelineRun) v1.ChildStatusReference {
+	c := v1.ChildStatusReference{
+		TypeMeta: runtime.TypeMeta{
+			APIVersion: v1.SchemeGroupVersion.String(),
+			Kind:       pipeline.PipelineRunControllerName,
+		},
+		Name:             pipelineRun.Name,
+		PipelineTaskName: t.PipelineTask.Name,
+		WhenExpressions:  t.PipelineTask.When,
+	}
+	return t.getDisplayName(pipelineRun, nil, nil, c)
+}
+
 func (t *ResolvedPipelineTask) getChildRefForRun(customRun *v1beta1.CustomRun) v1.ChildStatusReference {
-	return v1.ChildStatusReference{
+	c := v1.ChildStatusReference{
 		TypeMeta: runtime.TypeMeta{
 			APIVersion: v1beta1.SchemeGroupVersion.String(),
 			Kind:       pipeline.CustomRunControllerName,
@@ -248,10 +372,11 @@ func (t *ResolvedPipelineTask) getChildRefForRun(customRun *v1beta1.CustomRun) v
 		PipelineTaskName: t.PipelineTask.Name,
 		WhenExpressions:  t.PipelineTask.When,
 	}
+	return t.getDisplayName(nil, customRun, nil, c)
 }
 
 func (t *ResolvedPipelineTask) getChildRefForTaskRun(taskRun *v1.TaskRun) v1.ChildStatusReference {
-	return v1.ChildStatusReference{
+	c := v1.ChildStatusReference{
 		TypeMeta: runtime.TypeMeta{
 			APIVersion: v1.SchemeGroupVersion.String(),
 			Kind:       pipeline.TaskRunControllerName,
@@ -260,16 +385,17 @@ func (t *ResolvedPipelineTask) getChildRefForTaskRun(taskRun *v1.TaskRun) v1.Chi
 		PipelineTaskName: t.PipelineTask.Name,
 		WhenExpressions:  t.PipelineTask.When,
 	}
+	return t.getDisplayName(nil, nil, taskRun, c)
 }
 
-// getNextTasks returns a list of tasks which should be executed next i.e.
+// getNextTasks returns a list of pipeline tasks which should be executed next i.e.
 // a list of tasks from candidateTasks which aren't yet indicated in state to be running and
 // a list of cancelled/failed tasks from candidateTasks which haven't exhausted their retries
 func (state PipelineRunState) getNextTasks(candidateTasks sets.String) []*ResolvedPipelineTask {
 	tasks := []*ResolvedPipelineTask{}
 	for _, t := range state {
 		if _, ok := candidateTasks[t.PipelineTask.Name]; ok {
-			if len(t.TaskRuns) == 0 && len(t.CustomRuns) == 0 {
+			if len(t.TaskRuns) == 0 && len(t.CustomRuns) == 0 && len(t.ChildPipelineRuns) == 0 {
 				tasks = append(tasks, t)
 			}
 		}
@@ -278,11 +404,11 @@ func (state PipelineRunState) getNextTasks(candidateTasks sets.String) []*Resolv
 }
 
 // IsStopping returns true if the PipelineRun won't be scheduling any new Task because
-// at least one task already failed or was cancelled in the specified dag
+// at least one task already failed (with onError: stopAndFail) or was cancelled in the specified dag
 func (facts *PipelineRunFacts) IsStopping() bool {
 	for _, t := range facts.State {
 		if facts.isDAGTask(t.PipelineTask.Name) {
-			if t.isFailure() {
+			if (t.isFailure() || t.isValidationFailed(facts.ValidationFailedTask)) && t.PipelineTask.OnError != v1.PipelineTaskContinue {
 				return true
 			}
 		}
@@ -380,8 +506,24 @@ func (facts *PipelineRunFacts) GetFinalTasks() PipelineRunState {
 	return tasks
 }
 
+// IsFinalTaskStarted returns true if all DAG pipelineTasks is finished and one or more final tasks have been created.
+func (facts *PipelineRunFacts) IsFinalTaskStarted() bool {
+	// check either pipeline has finished executing all DAG pipelineTasks,
+	// where "finished executing" means succeeded, failed, or skipped.
+	if facts.checkDAGTasksDone() {
+		// return list of tasks with all final tasks
+		for _, t := range facts.State {
+			if facts.isFinalTask(t.PipelineTask.Name) && t.isScheduled() {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // GetPipelineConditionStatus will return the Condition that the PipelineRun prName should be
-// updated with, based on the status of the TaskRuns in state.
+// updated with, based on the status of the child PipelineRuns/TaskRuns/CustomRuns in state.
 func (facts *PipelineRunFacts) GetPipelineConditionStatus(ctx context.Context, pr *v1.PipelineRun, logger *zap.SugaredLogger, c clock.PassiveClock) *apis.Condition {
 	// We have 4 different states here:
 	// 1. Timed out -> Failed
@@ -397,11 +539,22 @@ func (facts *PipelineRunFacts) GetPipelineConditionStatus(ctx context.Context, p
 		}
 	}
 
+	if pr.HaveTasksTimedOut(ctx, c) {
+		return &apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionFalse,
+			Reason:  v1.PipelineRunReasonTimedOut.String(),
+			Message: fmt.Sprintf("PipelineRun %q failed due to tasks failed to finish within %q", pr.Name, pr.TasksTimeout().Duration.String()),
+		}
+	}
+
 	// report the count in PipelineRun Status
 	// get the count of successful tasks, failed tasks, cancelled tasks, skipped task, and incomplete tasks
 	s := facts.getPipelineTasksCount()
-	// completed task is a collection of successful, failed, cancelled tasks (skipped tasks are reported separately)
-	cmTasks := s.Succeeded + s.Failed + s.Cancelled
+	// completed task is a collection of successful, failed, cancelled tasks
+	// (skipped tasks and validation failed tasks are reported separately)
+	cmTasks := s.Succeeded + s.Failed + s.Cancelled + s.IgnoredFailed
+	totalFailedTasks := s.Failed + s.IgnoredFailed
 
 	// The completion reason is set from the TaskRun completion reason
 	// by default, set it to ReasonRunning
@@ -411,14 +564,27 @@ func (facts *PipelineRunFacts) GetPipelineConditionStatus(ctx context.Context, p
 	if s.Incomplete == 0 {
 		status := corev1.ConditionTrue
 		reason := v1.PipelineRunReasonSuccessful.String()
-		message := fmt.Sprintf("Tasks Completed: %d (Failed: %d, Cancelled %d), Skipped: %d",
-			cmTasks, s.Failed, s.Cancelled, s.Skipped)
+		var message string
+		if s.IgnoredFailed > 0 {
+			message = fmt.Sprintf("Tasks Completed: %d (Failed: %d (Ignored: %d), Cancelled %d), Skipped: %d",
+				cmTasks, totalFailedTasks, s.IgnoredFailed, s.Cancelled, s.Skipped)
+		} else {
+			message = fmt.Sprintf("Tasks Completed: %d (Failed: %d, Cancelled %d), Skipped: %d",
+				cmTasks, totalFailedTasks, s.Cancelled, s.Skipped)
+		}
+		// append validation failed count in the message
+		if s.ValidationFailed > 0 {
+			message += fmt.Sprintf(", Failed Validation: %d", s.ValidationFailed)
+		}
 		// Set reason to ReasonCompleted - At least one is skipped
 		if s.Skipped > 0 {
 			reason = v1.PipelineRunReasonCompleted.String()
 		}
 
 		switch {
+		case s.ValidationFailed > 0:
+			reason = v1.PipelineRunReasonFailedValidation.String()
+			status = corev1.ConditionFalse
 		case s.Failed > 0 || s.SkippedDueToTimeout > 0:
 			// Set reason to ReasonFailed - At least one failed
 			reason = v1.PipelineRunReasonFailed.String()
@@ -433,7 +599,7 @@ func (facts *PipelineRunFacts) GetPipelineConditionStatus(ctx context.Context, p
 			reason = v1.PipelineRunReasonCancelled.String()
 			status = corev1.ConditionFalse
 		}
-		logger.Infof("All TaskRuns have finished for PipelineRun %s so it has finished", pr.Name)
+		logger.Infof("All child PipelineRuns/TaskRuns/CustomRuns have finished for PipelineRun %s so it has finished", pr.Name)
 		return &apis.Condition{
 			Type:    apis.ConditionSucceeded,
 			Status:  status,
@@ -495,8 +661,9 @@ func (facts *PipelineRunFacts) GetSkippedTasks() []v1.SkippedTask {
 	return skipped
 }
 
-// GetPipelineTaskStatus returns the status of a PipelineTask depending on its taskRun
-// the checks are implemented such that the finally tasks are requesting status of the dag tasks
+// GetPipelineTaskStatus returns the status of a PipelineTask depending on its child
+// PipelineRun/TaskRun/CustomRun. The checks are implemented such that the finally tasks
+// are requesting status of the dag tasks.
 func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 	// construct a map of tasks.<pipelineTask>.status and its state
 	tStatus := make(map[string]string)
@@ -515,19 +682,33 @@ func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 				s = PipelineTaskStateNone
 			}
 			tStatus[PipelineTaskStatusPrefix+t.PipelineTask.Name+PipelineTaskStatusSuffix] = s
+			tStatus[PipelineTaskStatusPrefix+t.PipelineTask.Name+PipelineTaskReasonSuffix] = t.getReason()
 		}
 	}
+
 	// initialize aggregate status of all dag tasks to None
 	aggregateStatus := PipelineTaskStateNone
 	if facts.checkDAGTasksDone() {
-		// all dag tasks are done, change the aggregate status to succeeded
+		// all dag pipeline tasks are done, change the aggregate status to succeeded
 		// will reset it to failed/skipped if needed
 		aggregateStatus = v1.PipelineRunReasonSuccessful.String()
 		for _, t := range facts.State {
 			if facts.isDAGTask(t.PipelineTask.Name) {
-				// if any of the dag task failed, change the aggregate status to failed and return
-				if !t.IsCustomTask() && t.haveAnyTaskRunsFailed() || t.IsCustomTask() && t.haveAnyCustomRunsFailed() {
-					aggregateStatus = v1beta1.PipelineRunReasonFailed.String()
+				// if any of the dag pipeline tasks failed, change the aggregate status to failed and return
+				if t.IsChildPipeline() && t.haveAnyChildPipelineRunsFailed() {
+					aggregateStatus = v1.PipelineRunReasonFailed.String()
+					break
+				}
+
+				if t.IsCustomTask() && t.haveAnyCustomRunsFailed() {
+					aggregateStatus = v1.PipelineRunReasonFailed.String()
+					break
+				}
+
+				// if it's not a custom task or a child pipeline it's a task so we only
+				// need to check if any TaskRuns failed
+				if t.haveAnyTaskRunsFailed() {
+					aggregateStatus = v1.PipelineRunReasonFailed.String()
 					break
 				}
 				// if any of the dag task skipped, change the aggregate status to completed
@@ -538,7 +719,32 @@ func (facts *PipelineRunFacts) GetPipelineTaskStatus() map[string]string {
 			}
 		}
 	}
+
 	tStatus[v1.PipelineTasksAggregateStatus] = aggregateStatus
+	return tStatus
+}
+
+// GetPipelineFinalTaskStatus returns the status of a PipelineFinalTask depending on its taskRun
+func (facts *PipelineRunFacts) GetPipelineFinalTaskStatus() map[string]string {
+	// construct a map of tasks.<pipelineTask>.status and its state
+	tStatus := make(map[string]string)
+	for _, t := range facts.State {
+		if facts.isFinalTask(t.PipelineTask.Name) {
+			var s string
+			switch {
+			// execution status is Succeeded when a task has succeeded condition with status set to true
+			case t.isSuccessful():
+				s = v1.TaskRunReasonSuccessful.String()
+			// execution status is Failed when a task has succeeded condition with status set to false
+			case t.haveAnyRunsFailed():
+				s = v1.TaskRunReasonFailed.String()
+			default:
+				// None includes skipped as well
+				s = PipelineTaskStateNone
+			}
+			tStatus[PipelineTaskStatusPrefix+t.PipelineTask.Name+PipelineTaskStatusSuffix] = s
+		}
+	}
 	return tStatus
 }
 
@@ -588,6 +794,8 @@ func (facts *PipelineRunFacts) getPipelineTasksCount() pipelineRunStatusCount {
 		Cancelled:           0,
 		Incomplete:          0,
 		SkippedDueToTimeout: 0,
+		IgnoredFailed:       0,
+		ValidationFailed:    0,
 	}
 	for _, t := range facts.State {
 		switch {
@@ -600,9 +808,15 @@ func (facts *PipelineRunFacts) getPipelineTasksCount() pipelineRunStatusCount {
 		// increment cancelled counter since the task is cancelled
 		case t.isCancelled():
 			s.Cancelled++
-		// increment failure counter since the task has failed
+		// increment failure counter based on Task OnError type since the task has failed
 		case t.isFailure():
-			s.Failed++
+			if t.PipelineTask.OnError == v1.PipelineTaskContinue {
+				s.IgnoredFailed++
+			} else {
+				s.Failed++
+			}
+		case t.isValidationFailed(facts.ValidationFailedTask):
+			s.ValidationFailed++
 		// increment skipped and skipped due to timeout counters since the task was skipped due to the pipeline, tasks, or finally timeout being reached before the task was launched
 		case t.Skip(facts).SkippingReason == v1.PipelineTimedOutSkip ||
 			t.Skip(facts).SkippingReason == v1.TasksTimedOutSkip ||

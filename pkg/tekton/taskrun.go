@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
@@ -96,7 +96,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1.TaskRun, ts *v1.TaskSp
 		defaults = append(defaults, ts.Params...)
 	}
 	// Apply parameter substitution from the taskrun.
-	ts = resources.ApplyParameters(ctx, ts, tr, defaults...)
+	ts = resources.ApplyParameters(ts, tr, defaults...)
 
 	// Apply context substitution from the taskrun
 	ts = resources.ApplyContexts(ts, taskName, tr)
@@ -114,7 +114,7 @@ func applyTaskRunSubstitution(ctx context.Context, tr *v1.TaskRun, ts *v1.TaskSp
 	ts = resources.ApplyWorkspaces(ctx, ts, ts.Workspaces, tr.Spec.Workspaces, workspaceVolumes)
 
 	// Apply task result substitution
-	ts = resources.ApplyTaskResults(ts)
+	ts = resources.ApplyResults(ts)
 
 	// Apply step exitCode path substitution
 	ts = resources.ApplyStepExitCodePath(ts)

@@ -8,6 +8,8 @@ package exported
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -45,8 +47,13 @@ func HasStatusCode(resp *http.Response, statusCodes ...int) bool {
 // AccessToken represents an Azure service bearer access token with expiry information.
 // Exported as azcore.AccessToken.
 type AccessToken struct {
-	Token     string
+	// Token is the access token
+	Token string
+	// ExpiresOn indicates when the token expires
 	ExpiresOn time.Time
+	// RefreshOn is a suggested time to refresh the token.
+	// Clients should ignore this value when it's zero.
+	RefreshOn time.Time
 }
 
 // TokenRequestOptions contain specific parameter that may be used by credentials types when attempting to get a token.
@@ -76,6 +83,38 @@ type TokenRequestOptions struct {
 type TokenCredential interface {
 	// GetToken requests an access token for the specified set of scopes.
 	GetToken(ctx context.Context, options TokenRequestOptions) (AccessToken, error)
+}
+
+// DecodeByteArray will base-64 decode the provided string into v.
+// Exported as runtime.DecodeByteArray()
+func DecodeByteArray(s string, v *[]byte, format Base64Encoding) error {
+	if len(s) == 0 {
+		return nil
+	}
+	payload := string(s)
+	if payload[0] == '"' {
+		// remove surrounding quotes
+		payload = payload[1 : len(payload)-1]
+	}
+	switch format {
+	case Base64StdFormat:
+		decoded, err := base64.StdEncoding.DecodeString(payload)
+		if err == nil {
+			*v = decoded
+			return nil
+		}
+		return err
+	case Base64URLFormat:
+		// use raw encoding as URL format should not contain any '=' characters
+		decoded, err := base64.RawURLEncoding.DecodeString(payload)
+		if err == nil {
+			*v = decoded
+			return nil
+		}
+		return err
+	default:
+		return fmt.Errorf("unrecognized byte array format: %d", format)
+	}
 }
 
 // KeyCredential contains an authentication key used to authenticate to an Azure service.

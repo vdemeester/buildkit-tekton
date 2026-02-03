@@ -108,7 +108,7 @@ func run(opts *runOption) error {
 	}
 
 	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
-	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig)}
+	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(authprovider.DockerAuthProviderConfig{ConfigFile: dockerConfig})}
 	buildopts := client.SolveOpt{
 		LocalDirs: map[string]string{
 			"context":    dir,

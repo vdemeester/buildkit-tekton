@@ -1,3 +1,5 @@
+//go:build !disable_tls
+
 /*
 Copyright 2019 The Tekton Authors
 
@@ -39,14 +41,17 @@ func ParseMessage(logger *zap.SugaredLogger, msg string) ([]result.RunResult, er
 		return nil, fmt.Errorf("parsing message json: %w, msg: %s", err, msg)
 	}
 
-	for i, rr := range r {
-		if rr == (result.RunResult{}) {
+	writeIndex := 0
+	for _, rr := range r {
+		if rr != (result.RunResult{}) {
 			// Erase incorrect result
-			r[i] = r[len(r)-1]
-			r = r[:len(r)-1]
+			r[writeIndex] = rr
+			writeIndex++
+		} else {
 			logger.Errorf("termination message contains non taskrun or pipelineresource result keys")
 		}
 	}
+	r = r[:writeIndex]
 
 	// Remove duplicates (last one wins) and sort by key.
 	m := map[string]result.RunResult{}

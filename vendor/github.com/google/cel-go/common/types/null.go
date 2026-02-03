@@ -17,9 +17,11 @@ package types
 import (
 	"fmt"
 	"reflect"
+	"strings"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/google/cel-go/common/types/ref"
-	"google.golang.org/protobuf/proto"
 
 	anypb "google.golang.org/protobuf/types/known/anypb"
 	structpb "google.golang.org/protobuf/types/known/structpb"
@@ -29,31 +31,47 @@ import (
 type Null structpb.NullValue
 
 var (
-	// NullType singleton.
-	NullType = NewTypeValue("null_type")
 	// NullValue singleton.
 	NullValue = Null(structpb.NullValue_NULL_VALUE)
 
-	jsonNullType = reflect.TypeOf(structpb.NullValue_NULL_VALUE)
+	// golang reflect type for Null values.
+	nullReflectType = reflect.TypeOf(NullValue)
+
+	protoIfaceType = reflect.TypeOf((*proto.Message)(nil)).Elem()
 )
 
 // ConvertToNative implements ref.Val.ConvertToNative.
-func (n Null) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (n Null) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	switch typeDesc.Kind() {
 	case reflect.Int32:
-		return reflect.ValueOf(n).Convert(typeDesc).Interface(), nil
+		switch typeDesc {
+		case JSONNullType:
+			return structpb.NullValue_NULL_VALUE, nil
+		case nullReflectType:
+			return n, nil
+		}
 	case reflect.Ptr:
 		switch typeDesc {
 		case anyValueType:
 			// Convert to a JSON-null before packing to an Any field since the enum value for JSON
 			// null cannot be packed directly.
-			pb, err := n.ConvertToNative(jsonValueType)
+			pb, err := n.ConvertToNative(JSONValueType)
 			if err != nil {
 				return nil, err
 			}
 			return anypb.New(pb.(proto.Message))
-		case jsonValueType:
+		case JSONValueType:
 			return structpb.NewNullValue(), nil
+		case boolWrapperType, byteWrapperType, doubleWrapperType, floatWrapperType,
+			int32WrapperType, int64WrapperType, stringWrapperType, uint32WrapperType,
+			uint64WrapperType, durationValueType, timestampValueType, protoIfaceType:
+			return nil, nil
+		case JSONListType, JSONStructType:
+			// skip handling
+		default:
+			if typeDesc.Implements(protoIfaceType) {
+				return nil, nil
+			}
 		}
 	case reflect.Interface:
 		nv := n.Value()
@@ -86,12 +104,21 @@ func (n Null) Equal(other ref.Val) ref.Val {
 	return Bool(NullType == other.Type())
 }
 
+// IsZeroValue returns true as null always represents an absent value.
+func (n Null) IsZeroValue() bool {
+	return true
+}
+
 // Type implements ref.Val.Type.
 func (n Null) Type() ref.Type {
 	return NullType
 }
 
 // Value implements ref.Val.Value.
-func (n Null) Value() interface{} {
+func (n Null) Value() any {
 	return structpb.NullValue_NULL_VALUE
+}
+
+func (n Null) format(sb *strings.Builder) {
+	sb.WriteString("null")
 }

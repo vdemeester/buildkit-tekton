@@ -21,14 +21,25 @@ import (
 	"hash"
 	"hash/fnv"
 	"sort"
+	"strings"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	"github.com/tektoncd/pipeline/pkg/apis/resolution/v1beta1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"knative.dev/pkg/kmeta"
 )
 
-// nameHasher returns the hash.Hash to use when generating names.
-func nameHasher() hash.Hash {
-	return fnv.New128a()
-}
+const (
+	// ParamName is a param that explicitly assigns a name to the remote object
+	ParamName = "name"
+
+	// ParamURL is a param that hold the URL used for accesing the remote object
+	ParamURL = "url"
+)
+
+//
+
+const maxLength = validation.DNS1123LabelMaxLength
 
 // GenerateDeterministicName makes a best-effort attempt to create a
 // unique but reproducible name for use in a Request. The returned value
@@ -36,11 +47,51 @@ func nameHasher() hash.Hash {
 // given and {hash} is nameHasher(base) + nameHasher(param1) +
 // nameHasher(param2) + ...
 func GenerateDeterministicName(prefix, base string, params v1.Params) (string, error) {
+	return GenerateDeterministicNameFromSpec(prefix, base, &v1beta1.ResolutionRequestSpec{Params: params})
+}
+
+// GetNameAndNamespace determines the name and namespace for a resource request.
+// It prioritizes explicit values, falling back to the owning object and "default" namespace.
+// If needed, it generates a deterministic name to prevent duplicate requests within a context.
+func GetNameAndNamespace(resolverName string, owner kmeta.OwnerRefable, name string, namespace string, req *v1beta1.ResolutionRequestSpec) (string, string, error) {
+	if name == "" {
+		name = owner.GetObjectMeta().GetName()
+		namespace = owner.GetObjectMeta().GetNamespace()
+	}
+	if namespace == "" {
+		namespace = "default"
+	}
+	// Generating a deterministic name for the resource request
+	// prevents multiple requests being issued for the same
+	// pipelinerun's pipelineRef or taskrun's taskRef.
+	remoteResourceBaseName := namespace + "/" + name
+	name, err := GenerateDeterministicNameFromSpec(resolverName, remoteResourceBaseName, req)
+	if err != nil {
+		return "", "", fmt.Errorf("error generating name for taskrun %s/%s: %w", namespace, name, err)
+	}
+	return name, namespace, nil
+}
+
+// nameHasher returns the hash.Hash to use when generating names.
+func nameHasher() hash.Hash {
+	return fnv.New128a()
+}
+
+// GenerateDeterministicNameFromSpec makes a best-effort attempt to create a
+// unique but reproducible name for use in a Request. The returned value
+// will have the format {prefix}-{hash} where {prefix} is
+// given and {hash} is nameHasher(base) + nameHasher(param1) +
+// nameHasher(param2) + ...
+func GenerateDeterministicNameFromSpec(prefix, base string, resolutionSpec *v1beta1.ResolutionRequestSpec) (string, error) {
 	hasher := nameHasher()
 	if _, err := hasher.Write([]byte(base)); err != nil {
 		return "", err
 	}
 
+	if resolutionSpec == nil {
+		return fmt.Sprintf("%s-%x", prefix, hasher.Sum(nil)), nil
+	}
+	params := resolutionSpec.Params
 	sortedParams := make(v1.Params, len(params))
 	for i := range params {
 		sortedParams[i] = *params[i].DeepCopy()
@@ -67,5 +118,39 @@ func GenerateDeterministicName(prefix, base string, params v1.Params) (string, e
 			}
 		}
 	}
-	return fmt.Sprintf("%s-%x", prefix, hasher.Sum(nil)), nil
+	if len(resolutionSpec.URL) > 0 {
+		if _, err := hasher.Write([]byte(resolutionSpec.URL)); err != nil {
+			return "", err
+		}
+	}
+	name := fmt.Sprintf("%s-%x", prefix, hasher.Sum(nil))
+	if maxLength > len(name) {
+		return name, nil
+	}
+	return name[:strings.LastIndex(name[:maxLength], " ")], nil
+}
+
+// GenerateErrorLogString makes a best effort attempt to get the name of the task
+// when a resolver error occurred.  The TaskRef name does not have to be set, where
+// the specific resolver gets the name from the parameters.
+func GenerateErrorLogString(resolverType string, params v1.Params) string {
+	paramString := fmt.Sprintf("resolver type %s\n", resolverType)
+	for _, p := range params {
+		if p.Name == ParamName {
+			name := p.Value.StringVal
+			if p.Value.Type != v1.ParamTypeString {
+				asJSON, err := p.Value.MarshalJSON()
+				if err != nil {
+					paramString += fmt.Sprintf("name could not be marshalled: %s\n", err.Error())
+					continue
+				}
+				name = string(asJSON)
+			}
+			paramString += fmt.Sprintf("name = %s\n", name)
+		}
+		if p.Name == ParamURL {
+			paramString += fmt.Sprintf("url = %s\n", p.Value.StringVal)
+		}
+	}
+	return paramString
 }

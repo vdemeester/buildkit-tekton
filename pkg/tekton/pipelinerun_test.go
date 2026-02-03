@@ -227,6 +227,26 @@ func TestPipelineRunToLLB_WithWhenExpressions(t *testing.T) {
 	}
 }
 
+func TestValidateTaskSpec_WithStepTimeout(t *testing.T) {
+	// RED: This test should pass once Step Timeout is supported
+	// Currently it should fail because Step Timeout is rejected
+	ctx := context.Background()
+	timeout := &metav1.Duration{Duration: 30 * 1000000000} // 30 seconds
+	spec := v1.TaskSpec{
+		Steps: []v1.Step{{
+			Name:    "step-with-timeout",
+			Image:   "alpine:latest",
+			Script:  "echo hello && sleep 5",
+			Timeout: timeout,
+		}},
+	}
+
+	err := validateTaskSpec(ctx, spec)
+	if err != nil {
+		t.Errorf("validateTaskSpec() with Step Timeout should not error, got: %v", err)
+	}
+}
+
 // Suppress unused import warnings
 var _ = fmt.Sprintf
 var _ = os.Stderr

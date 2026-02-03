@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/distribution/reference"
 	"github.com/moby/buildkit/client/llb"
@@ -152,20 +153,27 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name 
 		// Check if this step should continue on error
 		continueOnError := step.OnError == v1.Continue
 
+		// Get step timeout as time.Duration pointer
+		var stepTimeout *time.Duration
+		if step.Timeout != nil {
+			d := step.Timeout.Duration
+			stepTimeout = &d
+		}
+
 		runOptions := []llb.RunOption{
 			llb.IgnoreCache,
 			llb.WithCustomName("[tekton] " + name + "/" + step.Name),
 		}
 		if step.Script != "" {
-			filename, scriptSt := files.Script(name+"/"+step.Name, fmt.Sprintf("script-%d", i), step.Script, continueOnError)
+			filename, scriptSt := files.Script(name+"/"+step.Name, fmt.Sprintf("script-%d", i), step.Script, continueOnError, stepTimeout)
 			scriptFile := filepath.Join(scriptsDir, filename)
 			runOptions = append(runOptions,
 				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath("/"), llb.Readonly),
 				llb.Args([]string{scriptFile}),
 			)
-		} else if continueOnError && len(step.Command) > 0 {
-			// For commands with OnError: continue, wrap in a script
-			filename, scriptSt := files.CommandWrapper(name+"/"+step.Name, fmt.Sprintf("cmd-%d", i), step.Command, step.Args, true)
+		} else if (continueOnError || stepTimeout != nil) && len(step.Command) > 0 {
+			// For commands with OnError: continue or with timeout, wrap in a script
+			filename, scriptSt := files.CommandWrapper(name+"/"+step.Name, fmt.Sprintf("cmd-%d", i), step.Command, step.Args, continueOnError, stepTimeout)
 			scriptFile := filepath.Join(scriptsDir, filename)
 			runOptions = append(runOptions,
 				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath("/"), llb.Readonly),
@@ -300,9 +308,7 @@ func validateTaskSpec(ctx context.Context, t v1.TaskSpec) error {
 		}
 	}
 	for i, s := range t.Steps {
-		if s.Timeout != nil {
-			return errors.Errorf("Step %d: Timeout not supported", i)
-		}
+		// Step Timeout is now supported (wrapped with timeout command)
 		// OnError is now supported (continue and stopAndFail)
 		if len(s.EnvFrom) > 0 {
 			return errors.Errorf("Step %d: EnvFrom not supported", i)

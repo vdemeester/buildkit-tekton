@@ -28,6 +28,8 @@ func TestReadResources(t *testing.T) {
 		main: "workspaces.yaml",
 	}, {
 		main: "taskrun-with-volumes-and-onerror.yaml",
+	}, {
+		main: "pipelinerun-with-finally.yaml",
 	}}
 	for _, tc := range tt {
 		tc := tc

@@ -1,0 +1,23 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: test-finally
+spec:
+  pipelineSpec:
+    tasks:
+    - name: main-task
+      taskSpec:
+        steps:
+        - name: do-work
+          image: alpine:latest
+          script: |
+            echo "Main task running"
+            echo "result" > /tekton/results/output
+    finally:
+    - name: cleanup
+      taskSpec:
+        steps:
+        - name: cleanup-step
+          image: alpine:latest
+          script: |
+            echo "Cleanup running - this always runs"

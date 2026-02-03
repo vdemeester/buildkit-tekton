@@ -96,7 +96,16 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		}
 	}
 	tasks := map[string][]llb.State{}
+	skippedTasks := map[string]bool{} // Track tasks skipped due to WhenExpressions
 	for _, t := range spec.Tasks {
+		// Evaluate WhenExpressions - skip task if conditions not met
+		if len(t.When) > 0 {
+			if !evaluateWhenExpressions(t.When) {
+				skippedTasks[t.Name] = true
+				continue
+			}
+		}
+
 		var ts v1.TaskSpec
 		var name string
 		if t.TaskRef != nil {
@@ -281,9 +290,10 @@ func validatePipelineRun(ctx context.Context, pr *v1.PipelineRun) error {
 
 func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 	// Finally blocks are now supported
+	// WhenExpressions are now supported (for regular tasks only, not finally)
 	for _, pt := range p.Finally {
 		if len(pt.When) > 0 {
-			return errors.Errorf("Finally task %s: WhenExpressions not supported", pt.Name)
+			return errors.Errorf("Finally task %s: WhenExpressions not supported in finally blocks", pt.Name)
 		}
 		if pt.Timeout != nil {
 			return errors.Errorf("Finally task %s: Timeout not supported", pt.Name)
@@ -298,12 +308,10 @@ func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 		}
 	}
 	for _, pt := range p.Tasks {
-		if len(pt.When) > 0 {
-			return errors.Errorf("Task %s: WhenExpressions not supported", pt.Name)
-		}
+		// WhenExpressions are now supported - they are evaluated at LLB build time
 		// Silently ignore Retries
 		if pt.Timeout != nil {
-			return errors.Errorf("Task % s: Timeout not supported", pt.Name)
+			return errors.Errorf("Task %s: Timeout not supported", pt.Name)
 		}
 		if pt.TaskSpec != nil {
 			if !isTektonTask(pt.TaskSpec.TypeMeta) {
@@ -320,4 +328,43 @@ func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 func isTektonTask(typeMeta runtime.TypeMeta) bool {
 	return (typeMeta.APIVersion == "" && typeMeta.Kind == "") ||
 		(typeMeta.APIVersion == "tekton.dev/v1" && typeMeta.Kind == "Task")
+}
+
+// evaluateWhenExpressions evaluates all when expressions and returns true if all pass.
+// WhenExpressions are evaluated after parameter substitution, so the Input field
+// should contain the resolved value (not the $(params.xxx) reference).
+func evaluateWhenExpressions(whens v1.WhenExpressions) bool {
+	for _, when := range whens {
+		if !evaluateWhenExpression(when) {
+			return false
+		}
+	}
+	return true
+}
+
+// evaluateWhenExpression evaluates a single when expression.
+// Supports operators: "in" and "notin"
+func evaluateWhenExpression(when v1.WhenExpression) bool {
+	input := when.Input
+	values := when.Values
+
+	switch when.Operator {
+	case "in":
+		for _, v := range values {
+			if input == v {
+				return true
+			}
+		}
+		return false
+	case "notin":
+		for _, v := range values {
+			if input == v {
+				return false
+			}
+		}
+		return true
+	default:
+		// Unknown operator - default to true (permissive)
+		return true
+	}
 }

@@ -1,0 +1,35 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: onerror-demo-
+spec:
+  taskSpec:
+    description: |
+      Demonstrates OnError behavior. The second step fails but execution
+      continues because onError is set to "continue".
+    steps:
+      - name: step-1-succeeds
+        image: alpine:latest
+        script: |
+          echo "Step 1: Starting..."
+          echo "Step 1: Completed successfully!"
+      - name: step-2-fails-but-continues
+        image: alpine:latest
+        onError: continue
+        script: |
+          echo "Step 2: This step will fail..."
+          echo "Step 2: But onError=continue means we keep going"
+          exit 1
+      - name: step-3-runs-anyway
+        image: alpine:latest
+        script: |
+          echo "Step 3: This step runs despite step 2 failing!"
+          echo "Step 3: OnError=continue allows graceful degradation"
+          echo "SUCCESS" > /tekton/results/status
+      - name: step-4-verify
+        image: alpine:latest
+        script: |
+          echo "Step 4: Verifying results..."
+          cat /tekton/results/status
+          echo "All steps completed!"

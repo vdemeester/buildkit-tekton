@@ -29,10 +29,10 @@ spec:
             default: main
         steps:
           - name: git-init
-            image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.21.0
+            image: alpine/git:latest
             script: |
-              /ko-app/git-init -url=$(params.repo_url) -revision=$(params.revision) -path=$(workspaces.output.path)
-            workingDir: $(workspaces.output.path)
+              git clone --depth 1 --branch $(params.revision) $(params.repo_url) $(workspaces.output.path)
+            workingDir: /
         workspaces:
           - name: output
       workspaces:

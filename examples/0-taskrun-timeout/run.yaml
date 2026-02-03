@@ -1,0 +1,36 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: timeout-demo-
+spec:
+  taskSpec:
+    description: |
+      Demonstrates step timeout functionality.
+      Steps can have individual timeouts that limit their execution time.
+    steps:
+      - name: quick-step
+        image: alpine:latest
+        timeout: 30s
+        script: |
+          echo "This step has a 30s timeout but finishes quickly"
+          echo "Starting..."
+          sleep 2
+          echo "Done in 2 seconds!"
+      - name: step-with-timeout
+        image: alpine:latest
+        timeout: 10s
+        script: |
+          echo "This step has a 10s timeout"
+          echo "Doing some work..."
+          for i in 1 2 3 4 5; do
+            echo "Working... iteration $i"
+            sleep 1
+          done
+          echo "Completed within timeout!"
+      - name: final-step
+        image: alpine:latest
+        script: |
+          echo "Final step - no timeout specified"
+          echo "All previous steps completed successfully!"
+          echo "SUCCESS" > /tekton/results/status

@@ -11,10 +11,11 @@ mkdir -p "${td}"
 trap 'rm -rf ${td}' EXIT
 cp -a examples "${td}"
 
+: "${REGISTRY_PORT:=5050}"
 "$DOCKER" rm -f reg || true
-"$DOCKER" run -d --name reg -p 127.0.0.1:5000:5000 docker.io/library/registry:2
+"$DOCKER" run -d --name reg -p "127.0.0.1:${REGISTRY_PORT}:5000" docker.io/library/registry:2
 
-image="127.0.0.1:5000/buildkit-tekton:test-${version}-${timestamp}"
+image="127.0.0.1:${REGISTRY_PORT}/buildkit-tekton:test-${version}-${timestamp}"
 "$DOCKER" build -t "$image" -f Dockerfile.docker .
 "$DOCKER" push "$image"
 

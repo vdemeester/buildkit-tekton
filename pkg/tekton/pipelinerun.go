@@ -3,7 +3,6 @@ package tekton
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/moby/buildkit/client/llb"
@@ -159,11 +158,17 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		mounts := []llb.RunOption{}
 		if len(t.RunAfter) > 0 {
 			// RunAfter means, the first steps of the current Task needs to start after the last step of the referenced Task
-			// We are going to use mounts here too.
+			// We create dependencies by mounting the previous task's state (for ordering) and its results cache
 			for _, a := range t.RunAfter {
+				// Mount previous task's state for dependency ordering (mount the root as a hidden path)
+				depMount := fmt.Sprintf("/tekton/.deps/%s", a)
+				mounts = append(mounts,
+					llb.AddMount(depMount, tasks[a][len(tasks[a])-1], llb.SourcePath("/"), llb.Readonly),
+				)
+				// Mount previous task's results cache to access its results
 				targetMount := fmt.Sprintf("/tekton/from-task/%s", a)
 				mounts = append(mounts,
-					llb.AddMount(targetMount, tasks[a][len(tasks[a])-1], llb.SourcePath("/tekton/results"), llb.Readonly),
+					llb.AddMount(targetMount, llb.Scratch(), llb.AsPersistentCacheDir(a+"/results", llb.CacheMountShared), llb.Readonly),
 				)
 			}
 		}
@@ -182,9 +187,15 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		finallyMounts := []llb.RunOption{}
 		for taskName, taskStates := range tasks {
 			if len(taskStates) > 0 {
+				// Mount previous task's state for dependency ordering
+				depMount := fmt.Sprintf("/tekton/.deps/%s", taskName)
+				finallyMounts = append(finallyMounts,
+					llb.AddMount(depMount, taskStates[len(taskStates)-1], llb.SourcePath("/"), llb.Readonly),
+				)
+				// Mount previous task's results cache to access its results
 				targetMount := fmt.Sprintf("/tekton/from-task/%s", taskName)
 				finallyMounts = append(finallyMounts,
-					llb.AddMount(targetMount, taskStates[len(taskStates)-1], llb.SourcePath("/tekton/results"), llb.Readonly),
+					llb.AddMount(targetMount, llb.Scratch(), llb.AsPersistentCacheDir(taskName+"/results", llb.CacheMountShared), llb.Readonly),
 				)
 			}
 		}
@@ -241,20 +252,46 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		}
 	}
 
-	ft := llb.Scratch()
-	fa := llb.Mkdir("/task", os.FileMode(int(0777)))
+	// Build the final result state by mounting all task results caches
+	// First, collect all task states to establish dependencies
+	allStates := []llb.State{}
+	resultCacheMounts := []llb.RunOption{}
+
 	for n, t := range tasks {
-		state := t[len(t)-1]
-		taskPath := fmt.Sprintf("/task/%s", n)
-		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
+		if len(t) > 0 {
+			allStates = append(allStates, t[len(t)-1])
+			// Mount the results cache for this task
+			resultCacheMounts = append(resultCacheMounts,
+				llb.AddMount(fmt.Sprintf("/task/%s", n), llb.Scratch(), llb.AsPersistentCacheDir(n+"/results", llb.CacheMountShared), llb.Readonly),
+			)
+		}
 	}
-	// Include finally tasks in the result
 	for n, t := range finallyTasks {
-		state := t[len(t)-1]
-		taskPath := fmt.Sprintf("/task/finally/%s", n)
-		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
+		if len(t) > 0 {
+			allStates = append(allStates, t[len(t)-1])
+			resultCacheMounts = append(resultCacheMounts,
+				llb.AddMount(fmt.Sprintf("/task/finally/%s", n), llb.Scratch(), llb.AsPersistentCacheDir("finally/"+n+"/results", llb.CacheMountShared), llb.Readonly),
+			)
+		}
 	}
-	return ft.File(fa, llb.WithCustomName("[tekton] buildking image from result (fake)"), llb.IgnoreCache), nil
+
+	// Create dependencies on all task states
+	depMounts := []llb.RunOption{}
+	for i, state := range allStates {
+		depMounts = append(depMounts,
+			llb.AddMount(fmt.Sprintf("/.dep/%d", i), state, llb.SourcePath("/"), llb.Readonly),
+		)
+	}
+
+	// Combine all mounts and run a simple command to produce output
+	runOpts := []llb.RunOption{llb.Args([]string{"/bin/sh", "-c", "ls -la /task 2>/dev/null || true"})}
+	runOpts = append(runOpts, depMounts...)
+	runOpts = append(runOpts, resultCacheMounts...)
+	runOpts = append(runOpts, llb.WithCustomName("[tekton] collecting results"))
+
+	return llb.Image("alpine:latest", llb.WithMetaResolver(c)).
+		Run(runOpts...).
+		Root(), nil
 }
 
 func applyPipelineRunSubstitution(ctx context.Context, pr *v1.PipelineRun, ps *v1.PipelineSpec, pipelineName string) (v1.PipelineSpec, error) {

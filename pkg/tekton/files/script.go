@@ -9,14 +9,10 @@ import (
 	"github.com/tektoncd/pipeline/pkg/names"
 )
 
-const (
-	defaultScriptPreamble        = "#!/bin/sh\nset -e\n"
-	defaultScriptPreambleContinue = "#!/bin/sh\n"
-)
+const defaultScriptPreamble = "#!/bin/sh\nset -e\n"
 
 // Script creates an LLB state containing the script file.
-// If continueOnError is true, the script will not use "set -e" so that
-// errors are ignored and execution continues.
+// If continueOnError is true, the script execution is wrapped to ignore exit codes.
 // If timeout is non-nil, the script execution will be wrapped with the timeout command.
 func Script(stepName, scriptName, script string, continueOnError bool, timeout *time.Duration) (string, llb.State) {
 	// Check for a shebang, and add a default if it's not set.
@@ -25,16 +21,12 @@ func Script(stepName, scriptName, script string, continueOnError bool, timeout *
 	hasShebang := strings.HasPrefix(cleaned, "#!")
 
 	if !hasShebang {
-		if continueOnError {
-			script = defaultScriptPreambleContinue + script
-		} else {
-			script = defaultScriptPreamble + script
-		}
+		script = defaultScriptPreamble + script
 	}
 
-	// If timeout is specified, wrap the script in a wrapper that uses timeout
-	if timeout != nil {
-		script = wrapWithTimeout(script, *timeout, continueOnError)
+	// If continueOnError or timeout is specified, wrap the script
+	if continueOnError || timeout != nil {
+		script = wrapScript(script, timeout, continueOnError)
 	}
 
 	filename := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(scriptName)
@@ -89,26 +81,22 @@ func shellQuoteJoin(parts []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// wrapWithTimeout creates a wrapper script that executes the original script with a timeout.
-// The wrapper saves the original script to a temp file and executes it with the timeout command.
-func wrapWithTimeout(script string, timeout time.Duration, continueOnError bool) string {
-	timeoutStr := formatDuration(timeout)
+// wrapScript creates a wrapper script that executes the original script with optional timeout
+// and optional error suppression for onError: continue.
+func wrapScript(script string, timeout *time.Duration, continueOnError bool) string {
+	var timeoutPrefix string
+	if timeout != nil {
+		timeoutPrefix = fmt.Sprintf("timeout %s ", formatDuration(*timeout))
+	}
 
-	// Create a wrapper that writes the original script to a temp file and runs it with timeout
-	// This handles scripts with shebangs properly
-	var wrapper string
+	var errorSuffix string
 	if continueOnError {
-		wrapper = fmt.Sprintf(`#!/bin/sh
-SCRIPT_FILE=$(mktemp)
-trap "rm -f $SCRIPT_FILE" EXIT
-cat > $SCRIPT_FILE << 'TEKTON_SCRIPT_EOF'
-%s
-TEKTON_SCRIPT_EOF
-chmod +x $SCRIPT_FILE
-timeout %s $SCRIPT_FILE || true
-`, script, timeoutStr)
-	} else {
-		wrapper = fmt.Sprintf(`#!/bin/sh
+		errorSuffix = " || true"
+	}
+
+	// Create a wrapper that writes the original script to a temp file and runs it
+	// This handles scripts with shebangs properly
+	wrapper := fmt.Sprintf(`#!/bin/sh
 set -e
 SCRIPT_FILE=$(mktemp)
 trap "rm -f $SCRIPT_FILE" EXIT
@@ -116,9 +104,8 @@ cat > $SCRIPT_FILE << 'TEKTON_SCRIPT_EOF'
 %s
 TEKTON_SCRIPT_EOF
 chmod +x $SCRIPT_FILE
-timeout %s $SCRIPT_FILE
-`, script, timeoutStr)
-	}
+%s$SCRIPT_FILE%s
+`, script, timeoutPrefix, errorSuffix)
 	return wrapper
 }
 

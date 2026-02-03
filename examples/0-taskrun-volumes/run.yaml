@@ -1,0 +1,57 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: volumes-demo-
+spec:
+  taskSpec:
+    description: |
+      Demonstrates emptyDir volumes shared between steps.
+      Data written by one step can be read by subsequent steps.
+    volumes:
+      - name: shared-data
+        emptyDir: {}
+      - name: cache-dir
+        emptyDir: {}
+    steps:
+      - name: write-shared-data
+        image: alpine:latest
+        volumeMounts:
+          - name: shared-data
+            mountPath: /shared
+          - name: cache-dir
+            mountPath: /cache
+        script: |
+          echo "Writing data to shared volumes..."
+          echo "Hello from step 1!" > /shared/message.txt
+          date > /shared/timestamp.txt
+          echo "cached-value-12345" > /cache/data.txt
+          echo "Files created:"
+          ls -la /shared/
+          ls -la /cache/
+      - name: process-data
+        image: alpine:latest
+        volumeMounts:
+          - name: shared-data
+            mountPath: /shared
+          - name: cache-dir
+            mountPath: /cache
+        script: |
+          echo "Reading and processing shared data..."
+          echo "Message: $(cat /shared/message.txt)"
+          echo "Timestamp: $(cat /shared/timestamp.txt)"
+          echo "Cache: $(cat /cache/data.txt)"
+          # Append more data
+          echo "Processed by step 2" >> /shared/message.txt
+      - name: verify-data
+        image: alpine:latest
+        volumeMounts:
+          - name: shared-data
+            mountPath: /data
+            readOnly: true
+        script: |
+          echo "Verifying data (read-only mount)..."
+          echo "Final message content:"
+          cat /data/message.txt
+          echo "Final timestamp:"
+          cat /data/timestamp.txt

@@ -1,0 +1,58 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: envfrom-demo-
+spec:
+  taskSpec:
+    description: |
+      Demonstrates EnvFrom functionality to load environment variables
+      from ConfigMaps and Secrets.
+    steps:
+      - name: use-configmap-env
+        image: alpine:latest
+        envFrom:
+          - configMapRef:
+              name: app-config
+        script: |
+          echo "Environment variables from ConfigMap:"
+          echo "APP_NAME=${APP_NAME:-not set}"
+          echo "APP_ENV=${APP_ENV:-not set}"
+          echo "LOG_LEVEL=${LOG_LEVEL:-not set}"
+      - name: use-secret-env
+        image: alpine:latest
+        envFrom:
+          - secretRef:
+              name: app-secrets
+        script: |
+          echo "Environment variables from Secret:"
+          echo "DB_HOST is set: ${DB_HOST:+yes}"
+          echo "API_KEY is set: ${API_KEY:+yes}"
+      - name: use-prefixed-env
+        image: alpine:latest
+        envFrom:
+          - configMapRef:
+              name: app-config
+            prefix: CONFIG_
+        script: |
+          echo "Prefixed environment variables:"
+          echo "CONFIG_APP_NAME=${CONFIG_APP_NAME:-not set}"
+          env | grep ^CONFIG_ || echo "No CONFIG_ vars found"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  APP_NAME: "buildkit-tekton-demo"
+  APP_ENV: "development"
+  LOG_LEVEL: "debug"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+type: Opaque
+stringData:
+  DB_HOST: "localhost:5432"
+  API_KEY: "secret-api-key-12345"

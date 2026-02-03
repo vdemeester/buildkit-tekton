@@ -1,3 +1,4 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
 # In this contrived example 3 different kinds of workspace volume are used to thread
 # data through a pipeline's tasks.
 # 1. A ConfigMap is used as source of recipe data.

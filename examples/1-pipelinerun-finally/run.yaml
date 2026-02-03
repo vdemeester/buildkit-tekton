@@ -1,0 +1,69 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: finally-demo-
+spec:
+  pipelineSpec:
+    description: |
+      Demonstrates Finally blocks in PipelineRun.
+      Finally tasks run after all regular tasks complete,
+      regardless of whether they succeeded or failed.
+    tasks:
+      - name: setup
+        taskSpec:
+          steps:
+            - name: init
+              image: alpine:latest
+              script: |
+                echo "Setup: Initializing pipeline..."
+                echo "Setup: Creating resources..."
+                sleep 2
+                echo "Setup: Done!"
+                echo "setup-complete" > /tekton/results/status
+      - name: main-work
+        runAfter: [setup]
+        taskSpec:
+          steps:
+            - name: process
+              image: alpine:latest
+              script: |
+                echo "Main: Processing data..."
+                echo "Main: This is the main pipeline work"
+                for i in 1 2 3; do
+                  echo "Main: Processing batch $i"
+                  sleep 1
+                done
+                echo "Main: Work completed!"
+                echo "main-complete" > /tekton/results/status
+      - name: validation
+        runAfter: [main-work]
+        taskSpec:
+          steps:
+            - name: validate
+              image: alpine:latest
+              script: |
+                echo "Validation: Checking results..."
+                echo "Validation: All checks passed!"
+                echo "validation-complete" > /tekton/results/status
+    finally:
+      - name: cleanup
+        taskSpec:
+          steps:
+            - name: cleanup-resources
+              image: alpine:latest
+              script: |
+                echo "Finally: Cleanup starting..."
+                echo "Finally: Removing temporary resources..."
+                echo "Finally: Cleanup completed!"
+                echo "cleanup-done" > /tekton/results/status
+      - name: notify
+        taskSpec:
+          steps:
+            - name: send-notification
+              image: alpine:latest
+              script: |
+                echo "Finally: Sending notification..."
+                echo "Finally: Pipeline execution completed!"
+                echo "Finally: Status report sent."
+                echo "notify-done" > /tekton/results/status

@@ -1,0 +1,87 @@
+#syntax=ghcr.io/vdemeester/buildkit-tekton/frontend
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: when-demo-
+spec:
+  params:
+    - name: environment
+      value: "production"
+    - name: run-tests
+      value: "true"
+    - name: deploy-region
+      value: "us-east"
+  pipelineSpec:
+    description: |
+      Demonstrates WhenExpressions for conditional task execution.
+      Tasks only run when their when conditions evaluate to true.
+    params:
+      - name: environment
+        type: string
+        default: "development"
+      - name: run-tests
+        type: string
+        default: "false"
+      - name: deploy-region
+        type: string
+        default: "us-west"
+    tasks:
+      - name: always-runs
+        taskSpec:
+          steps:
+            - name: start
+              image: alpine:latest
+              script: |
+                echo "This task always runs"
+                echo "Environment: $(params.environment)"
+                echo "always-runs" > /tekton/results/status
+      - name: production-only
+        when:
+          - input: "$(params.environment)"
+            operator: in
+            values: ["production", "staging"]
+        taskSpec:
+          steps:
+            - name: prod-check
+              image: alpine:latest
+              script: |
+                echo "This task only runs in production or staging"
+                echo "Running production checks..."
+                echo "production-check-done" > /tekton/results/status
+      - name: run-tests-task
+        when:
+          - input: "$(params.run-tests)"
+            operator: in
+            values: ["true", "yes", "1"]
+        taskSpec:
+          steps:
+            - name: test
+              image: alpine:latest
+              script: |
+                echo "Running tests because run-tests=$(params.run-tests)"
+                echo "Test 1: PASS"
+                echo "Test 2: PASS"
+                echo "tests-done" > /tekton/results/status
+      - name: skip-us-west
+        when:
+          - input: "$(params.deploy-region)"
+            operator: notin
+            values: ["us-west"]
+        taskSpec:
+          steps:
+            - name: deploy
+              image: alpine:latest
+              script: |
+                echo "Deploying to $(params.deploy-region)"
+                echo "This task is skipped for us-west region"
+                echo "deploy-done" > /tekton/results/status
+      - name: final-summary
+        runAfter: [always-runs]
+        taskSpec:
+          steps:
+            - name: summary
+              image: alpine:latest
+              script: |
+                echo "Pipeline completed!"
+                echo "Some tasks may have been skipped based on conditions"
+                echo "summary-done" > /tekton/results/status

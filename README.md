@@ -65,6 +65,86 @@ with approximately the same hardware)
 - `buildkit-tekton`: 4m5s
 - `tekton` in `k8s`: 7m
 
+## Supported Tekton Features
+
+### TaskRun
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Embedded TaskSpec | ✅ Supported | |
+| TaskRef | ✅ Supported | Reference external Task definitions |
+| Parameters | ✅ Supported | Default values and overrides |
+| Results | ✅ Supported | Via `/tekton/results` directory |
+| Scripts | ✅ Supported | With shebang support |
+| Commands | ✅ Supported | command + args |
+| Step Templates | ✅ Supported | |
+| Environment Variables | ✅ Supported | Direct env and EnvFrom |
+| EnvFrom (ConfigMap/Secret) | ✅ Supported | Load env vars from ConfigMaps/Secrets |
+| Workspaces | ✅ Supported | ConfigMap, Secret, EmptyDir, PVC |
+| Volumes (emptyDir) | ✅ Supported | Share data between steps |
+| VolumeMounts | ✅ Supported | Mount volumes with subPath, readOnly |
+| OnError | ✅ Supported | `continue` and `stopAndFail` |
+| Step Timeout | ✅ Supported | Uses shell `timeout` command |
+| SecurityContext (runAsUser) | ✅ Supported | |
+| Sidecars | ❌ Not Supported | |
+| VolumeDevices | ❌ Not Supported | |
+| PodTemplate | ❌ Not Supported | |
+
+### PipelineRun
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Embedded PipelineSpec | ✅ Supported | |
+| PipelineRef | ✅ Supported | Reference external Pipeline definitions |
+| Parameters | ✅ Supported | Pipeline and Task level |
+| Workspaces | ✅ Supported | ConfigMap, Secret, EmptyDir, PVC, VolumeClaimTemplate |
+| RunAfter | ✅ Supported | Task ordering/dependencies |
+| WhenExpressions | ✅ Supported | Conditional task execution (`in`, `notin`) |
+| Finally Blocks | ✅ Supported | Tasks that run after all regular tasks |
+| Task Timeout | ✅ Supported | Applies to all steps in a task |
+| Results Sharing | ✅ Supported | Via `/tekton/from-task/<taskname>` |
+| Custom Tasks | ❌ Not Supported | |
+| TaskRunSpecs | ❌ Not Supported | |
+| Matrix | ❌ Not Supported | |
+
+### Resources
+
+| Resource | Status | Notes |
+|----------|--------|-------|
+| Task | ✅ Supported | Referenced via TaskRef |
+| Pipeline | ✅ Supported | Referenced via PipelineRef |
+| ConfigMap | ✅ Supported | For workspaces and EnvFrom |
+| Secret | ✅ Supported | For workspaces and EnvFrom |
+| PersistentVolumeClaim | ✅ Supported | For workspaces |
+| OCI Bundles | ⚠️ Partial | Experimental, requires `enable-tekton-oci-bundles=true` |
+
+## Examples
+
+The [examples](./examples) folder contains working examples for various features:
+
+### TaskRun Examples
+
+- **0-taskrun-simple**: Basic TaskRun with scripts and commands
+- **0-taskrun-with-params**: Parameter passing and default values
+- **0-taskrun-onerror**: OnError handling (`onError: continue`)
+- **0-taskrun-volumes**: EmptyDir volumes shared between steps
+- **0-taskrun-timeout**: Step timeout functionality
+- **0-taskrun-envfrom**: Environment variables from ConfigMaps/Secrets
+
+### PipelineRun Examples
+
+- **1-pipelinerun-simple**: Basic PipelineRun with runAfter
+- **1-pipelinerun-with-params**: Parameter propagation
+- **1-pipelinerun-with-workspaces**: ConfigMap, Secret, and PVC workspaces
+- **1-pipelinerun-finally**: Finally blocks for cleanup tasks
+- **1-pipelinerun-when**: WhenExpressions for conditional execution
+- **1-pipelinerun-go**: Real-world Go testing pipeline
+
+### Advanced Examples
+
+- **2-taskref-oci**: OCI bundle references
+- **3-context-and-ref**: External task references
+
 ## `tkn-local` Usage
 
 ```bash

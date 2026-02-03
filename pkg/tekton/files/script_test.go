@@ -38,7 +38,7 @@ cat foo`,
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			filename, state := files.Script("stepName", "scriptName", tc.script, tc.continueOnError)
+			filename, state := files.Script("stepName", "scriptName", tc.script, tc.continueOnError, nil)
 			// FIXME(vdemeester) exercise this better, most likely using buildkit testutil (integration)
 			t.Logf("%s: %+v", filename, state)
 		})
@@ -65,7 +65,7 @@ func TestCommandWrapper(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			filename, state := files.CommandWrapper("stepName", "cmdName", tc.command, tc.args, tc.continueOnError)
+			filename, state := files.CommandWrapper("stepName", "cmdName", tc.command, tc.args, tc.continueOnError, nil)
 			t.Logf("%s: %+v", filename, state)
 		})
 	}

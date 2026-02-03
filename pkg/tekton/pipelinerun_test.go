@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -271,6 +272,31 @@ func TestValidatePipeline_WithTaskTimeout(t *testing.T) {
 	err := validatePipeline(ctx, spec)
 	if err != nil {
 		t.Errorf("validatePipeline() with Task Timeout should not error, got: %v", err)
+	}
+}
+
+func TestValidateTaskSpec_WithEnvFrom(t *testing.T) {
+	// RED: This test should pass once EnvFrom is supported
+	// Currently it should fail because EnvFrom is rejected
+	ctx := context.Background()
+	spec := v1.TaskSpec{
+		Steps: []v1.Step{{
+			Name:  "step-with-envfrom",
+			Image: "alpine:latest",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: "my-config",
+					},
+				},
+			}},
+			Script: "echo $MY_VAR",
+		}},
+	}
+
+	err := validateTaskSpec(ctx, spec)
+	if err != nil {
+		t.Errorf("validateTaskSpec() with EnvFrom should not error, got: %v", err)
 	}
 }
 

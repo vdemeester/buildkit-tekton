@@ -19,8 +19,16 @@ image="127.0.0.1:${REGISTRY_PORT}/buildkit-tekton:test-${version}-${timestamp}"
 "$DOCKER" build -t "$image" -f Dockerfile.docker .
 "$DOCKER" push "$image"
 
+# Examples that require external resources (OCI bundles, network git clone, etc.)
+SKIP_EXAMPLES="2-taskref-oci 1-pipelinerun-go 3-context-and-ref"
+
 for f in "${td}"/examples/*; do
 	name="$(basename "${f}")"
+	# Skip examples that require external resources
+	if [[ " ${SKIP_EXAMPLES} " == *" ${name} "* ]]; then
+		echo "===== ${name} ===== (SKIPPED - requires external resources)"
+		continue
+	fi
 	echo "===== ${name} ====="
 	(
 		cd "$f"

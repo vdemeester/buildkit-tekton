@@ -158,11 +158,78 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 		}
 		tasks[t.Name] = stepStates
 	}
+
+	// Process Finally blocks - they run after ALL regular tasks complete
+	finallyTasks := map[string][]llb.State{}
+	if len(spec.Finally) > 0 {
+		// Build mounts from all regular tasks to ensure Finally runs after them
+		finallyMounts := []llb.RunOption{}
+		for taskName, taskStates := range tasks {
+			if len(taskStates) > 0 {
+				targetMount := fmt.Sprintf("/tekton/from-task/%s", taskName)
+				finallyMounts = append(finallyMounts,
+					llb.AddMount(targetMount, taskStates[len(taskStates)-1], llb.SourcePath("/tekton/results"), llb.Readonly),
+				)
+			}
+		}
+
+		for _, t := range spec.Finally {
+			var ts v1.TaskSpec
+			var name string
+			if t.TaskRef != nil {
+				name = t.TaskRef.Name
+				task, ok := r.tasks[t.TaskRef.Name]
+				if !ok {
+					return llb.State{}, errors.Errorf("Finally Taskref %s not found in context", t.TaskRef.Name)
+				}
+				task.SetDefaults(ctx)
+				ts = task.Spec
+			} else if t.TaskSpec != nil {
+				name = "embedded"
+				ts = t.TaskSpec.TaskSpec
+			}
+
+			ts, err = applyTaskRunSubstitution(ctx, &v1.TaskRun{
+				Spec: v1.TaskRunSpec{
+					Params:   t.Params,
+					TaskSpec: &ts,
+				},
+			}, &ts, name)
+			if err != nil {
+				return llb.State{}, errors.Wrapf(err, "variable interpolation failed for finally task %s", t.Name)
+			}
+
+			taskWorkspaces := []mountOptionFn{}
+			for _, w := range t.Workspaces {
+				fn := pipelineWorkspaces[w.Workspace]
+				if fn != nil {
+					taskWorkspaces = append(taskWorkspaces, fn("/workspace/"+w.Name))
+				}
+			}
+			steps, err := taskSpecToPSteps(ctx, c, ts, "finally/"+t.Name, taskWorkspaces)
+			if err != nil {
+				return llb.State{}, errors.Wrap(err, "couldn't translate Finally TaskSpec to llb")
+			}
+			resultState := llb.Scratch()
+			stepStates, err := pstepToState(c, steps, resultState, finallyMounts)
+			if err != nil {
+				return llb.State{}, err
+			}
+			finallyTasks[t.Name] = stepStates
+		}
+	}
+
 	ft := llb.Scratch()
 	fa := llb.Mkdir("/task", os.FileMode(int(0777)))
 	for n, t := range tasks {
 		state := t[len(t)-1]
 		taskPath := fmt.Sprintf("/task/%s", n)
+		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
+	}
+	// Include finally tasks in the result
+	for n, t := range finallyTasks {
+		state := t[len(t)-1]
+		taskPath := fmt.Sprintf("/task/finally/%s", n)
 		fa = fa.Copy(state, "/tekton", taskPath, &llb.CopyInfo{FollowSymlinks: true, CreateDestPath: true, AllowWildcard: true, AllowEmptyWildcard: true})
 	}
 	return ft.File(fa, llb.WithCustomName("[tekton] buildking image from result (fake)"), llb.IgnoreCache), nil
@@ -213,8 +280,22 @@ func validatePipelineRun(ctx context.Context, pr *v1.PipelineRun) error {
 }
 
 func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
-	if len(p.Finally) > 0 {
-		return errors.New("Finally are not supporte (yet)")
+	// Finally blocks are now supported
+	for _, pt := range p.Finally {
+		if len(pt.When) > 0 {
+			return errors.Errorf("Finally task %s: WhenExpressions not supported", pt.Name)
+		}
+		if pt.Timeout != nil {
+			return errors.Errorf("Finally task %s: Timeout not supported", pt.Name)
+		}
+		if pt.TaskSpec != nil {
+			if !isTektonTask(pt.TaskSpec.TypeMeta) {
+				return errors.Errorf("Finally task %s: Custom task not supported", pt.Name)
+			}
+			if err := validateTaskSpec(ctx, pt.TaskSpec.TaskSpec); err != nil {
+				return err
+			}
+		}
 	}
 	for _, pt := range p.Tasks {
 		if len(pt.When) > 0 {

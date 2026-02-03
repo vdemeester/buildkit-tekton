@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -32,9 +33,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/jellydator/ttlcache/v3"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -45,7 +45,7 @@ import (
 )
 
 func init() {
-	sigkms.AddProvider(ReferenceScheme, func(ctx context.Context, keyResourceID string, _ crypto.Hash, opts ...signature.RPCOption) (sigkms.SignerVerifier, error) {
+	sigkms.AddProvider(ReferenceScheme, func(ctx context.Context, keyResourceID string, _ crypto.Hash, _ ...signature.RPCOption) (sigkms.SignerVerifier, error) {
 		return LoadSignerVerifier(ctx, keyResourceID)
 	})
 }
@@ -116,7 +116,13 @@ func newAzureKMS(keyResourceID string) (*azureVaultClient, error) {
 		return nil, err
 	}
 
-	client, err := getKeysClient(vaultURL)
+	opts := getAzClientOpts()
+	cred, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: opts})
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := azkeys.NewClient(vaultURL, cred, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new azure kms client: %w", err)
 	}
@@ -134,44 +140,6 @@ func newAzureKMS(keyResourceID string) (*azureVaultClient, error) {
 	return azClient, nil
 }
 
-type authenticationMethod string
-
-const (
-	unknownAuthenticationMethod     = "unknown"
-	environmentAuthenticationMethod = "environment"
-	cliAuthenticationMethod         = "cli"
-)
-
-// getAuthMethod returns the an authenticationMethod to use to get an Azure Authorizer.
-// If no environment variables are set, unknownAuthMethod will be used.
-// If the environment variable 'AZURE_AUTH_METHOD' is set to either environment or cli, use it.
-// If the environment variables 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID' and 'AZURE_CLIENT_SECRET' are set, use environment.
-func getAuthenticationMethod() authenticationMethod {
-	tenantID := os.Getenv("AZURE_TENANT_ID")
-	clientID := os.Getenv("AZURE_CLIENT_ID")
-	clientSecret := os.Getenv("AZURE_CLIENT_SECRET")
-	authMethod := os.Getenv("AZURE_AUTH_METHOD")
-
-	if authMethod != "" {
-		switch strings.ToLower(authMethod) {
-		case "environment":
-			return environmentAuthenticationMethod
-		case "cli":
-			return cliAuthenticationMethod
-		}
-	}
-
-	if tenantID != "" && clientID != "" && clientSecret != "" {
-		return environmentAuthenticationMethod
-	}
-
-	return unknownAuthenticationMethod
-}
-
-type azureCredential interface {
-	GetToken(ctx context.Context, opts policy.TokenRequestOptions) (azcore.AccessToken, error)
-}
-
 func getAzClientOpts() azcore.ClientOptions {
 	envName := os.Getenv("AZURE_ENVIRONMENT")
 	switch envName {
@@ -184,74 +152,6 @@ func getAzClientOpts() azcore.ClientOptions {
 	default:
 		return azcore.ClientOptions{Cloud: cloud.AzurePublic}
 	}
-}
-
-// getAzureCredential takes an authenticationMethod and returns an Azure credential or an error.
-// If the method is unknown, Environment will be tested and if it returns an error CLI will be tested.
-// If the method is specified, the specified method will be used and no other will be tested.
-// This means the following default order of methods will be used if nothing else is defined:
-// 1. Client credentials (FromEnvironment)
-// 2. Client certificate (FromEnvironment)
-// 3. Username password (FromEnvironment)
-// 4. MSI (FromEnvironment)
-// 5. CLI (FromCLI)
-func getAzureCredential(method authenticationMethod) (azureCredential, error) {
-	clientOpts := getAzClientOpts()
-
-	switch method {
-	case environmentAuthenticationMethod:
-		envCred, err := azidentity.NewEnvironmentCredential(&azidentity.EnvironmentCredentialOptions{ClientOptions: clientOpts})
-		if err == nil {
-			return envCred, nil
-		}
-
-		o := &azidentity.ManagedIdentityCredentialOptions{ClientOptions: clientOpts}
-		if ID, ok := os.LookupEnv(azureClientID); ok {
-			o.ID = azidentity.ClientID(ID)
-		}
-		msiCred, err := azidentity.NewManagedIdentityCredential(o)
-		if err == nil {
-			return msiCred, nil
-		}
-
-		return nil, fmt.Errorf("failed to create default azure credential from env auth method: %w", err)
-	case cliAuthenticationMethod:
-		cred, err := azidentity.NewAzureCLICredential(nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create default Azure credential from env auth method: %w", err)
-		}
-		return cred, nil
-	case unknownAuthenticationMethod:
-		break
-	default:
-		return nil, fmt.Errorf("you should never reach this")
-	}
-
-	envCreds, err := azidentity.NewEnvironmentCredential(&azidentity.EnvironmentCredentialOptions{ClientOptions: clientOpts})
-	if err == nil {
-		return envCreds, nil
-	}
-
-	cliCreds, err := azidentity.NewAzureCLICredential(nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create default Azure credential from env auth method: %w", err)
-	}
-	return cliCreds, nil
-}
-
-func getKeysClient(vaultURL string) (*azkeys.Client, error) {
-	authMethod := getAuthenticationMethod()
-	cred, err := getAzureCredential(authMethod)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := azkeys.NewClient(vaultURL, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return client, nil
 }
 
 func (a *azureVaultClient) fetchPublicKey(ctx context.Context) (crypto.PublicKey, error) {
@@ -301,7 +201,7 @@ func (a *azureVaultClient) getKey(ctx context.Context) (azkeys.KeyBundle, error)
 func (a *azureVaultClient) public(ctx context.Context) (crypto.PublicKey, error) {
 	var lerr error
 	loader := ttlcache.LoaderFunc[string, crypto.PublicKey](
-		func(c *ttlcache.Cache[string, crypto.PublicKey], key string) *ttlcache.Item[string, crypto.PublicKey] {
+		func(c *ttlcache.Cache[string, crypto.PublicKey], _ string) *ttlcache.Item[string, crypto.PublicKey] {
 			ttl := 300 * time.Second
 			var pubKey crypto.PublicKey
 			pubKey, lerr = a.fetchPublicKey(ctx)
@@ -319,11 +219,32 @@ func (a *azureVaultClient) public(ctx context.Context) (crypto.PublicKey, error)
 }
 
 func (a *azureVaultClient) createKey(ctx context.Context) (crypto.PublicKey, error) {
+	// check if the key already exists by attempting to fetch it
 	_, err := a.getKey(ctx)
+	// if the error is nil, this means the key already exists
+	// and we can return the public key
 	if err == nil {
 		return a.public(ctx)
 	}
 
+	// If the returned error is not nil, set the error to the
+	// custom azcore.ResponseError error implementation
+	// this custom error allows us to check the status code
+	// returned by the GetKey operation. If the operation
+	// returned a 404, we know that the key does not exist
+	// and we can create it.
+	var respErr *azcore.ResponseError
+	if ok := errors.As(err, &respErr); !ok {
+		return nil, fmt.Errorf("unexpected error returned by get key operation: %w", err)
+	}
+
+	// if a non-404 status code is returned, return the error
+	// since this is an unexpected error response
+	if respErr.StatusCode != http.StatusNotFound {
+		return nil, fmt.Errorf("unexpected status code returned by get key operation: %w", err)
+	}
+
+	// if a 404 was returned, then we can create the key
 	_, err = a.client.CreateKey(
 		ctx,
 		a.keyName,

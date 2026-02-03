@@ -19,6 +19,7 @@ package resources
 import (
 	"fmt"
 
+	pipelineErrors "github.com/tektoncd/pipeline/pkg/apis/pipeline/errors"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -32,7 +33,7 @@ func ValidatePipelineTaskResults(state PipelineRunState) error {
 	for _, rpt := range state {
 		for _, ref := range v1.PipelineTaskResultRefs(rpt.PipelineTask) {
 			if err := validateResultRef(ref, ptMap); err != nil {
-				return fmt.Errorf("invalid result reference in pipeline task %q: %w", rpt.PipelineTask.Name, err)
+				return pipelineErrors.WrapUserError(fmt.Errorf("invalid result reference in pipeline task %q: %w", rpt.PipelineTask.Name, err))
 			}
 		}
 	}
@@ -100,12 +101,10 @@ func ValidateOptionalWorkspaces(pipelineWorkspaces []v1.PipelineWorkspaceDeclara
 
 	for _, rpt := range state {
 		for _, pws := range rpt.PipelineTask.Workspaces {
-			if optionalWorkspaces.Has(pws.Workspace) {
+			if rpt.ResolvedTask != nil && rpt.ResolvedTask.TaskSpec != nil && optionalWorkspaces.Has(pws.Workspace) {
 				for _, tws := range rpt.ResolvedTask.TaskSpec.Workspaces {
-					if tws.Name == pws.Name {
-						if !tws.Optional {
-							return fmt.Errorf("pipeline workspace %q is marked optional but pipeline task %q requires it be provided", pws.Workspace, rpt.PipelineTask.Name)
-						}
+					if tws.Name == pws.Name && !tws.Optional {
+						return fmt.Errorf("pipeline workspace %q is marked optional but pipeline task %q requires it be provided", pws.Workspace, rpt.PipelineTask.Name)
 					}
 				}
 			}

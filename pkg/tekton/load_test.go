@@ -8,9 +8,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/test/diff"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
 )
@@ -58,7 +57,7 @@ func testReadResources(main string, additionals []string) func(*testing.T) {
 
 func TestParseTektonYAMLInvalid(t *testing.T) {
 	s := k8scheme.Scheme
-	if err := v1beta1.AddToScheme(s); err != nil {
+	if err := v1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	tt := []struct {
@@ -106,7 +105,7 @@ spec:
 func TestParseTektonYAML(t *testing.T) {
 	ignoreTypeMeta := cmpopts.IgnoreTypes(metav1.TypeMeta{})
 	s := k8scheme.Scheme
-	if err := v1beta1.AddToScheme(s); err != nil {
+	if err := v1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	tt := []struct {
@@ -115,19 +114,19 @@ func TestParseTektonYAML(t *testing.T) {
 	}{{
 		yaml: `apiVersion: tekton.dev/v1
 kind: Task`,
-		expected: &v1beta1.Task{},
+		expected: &v1.Task{},
 	}, {
 		yaml: `apiVersion: tekton.dev/v1
 kind: TaskRun`,
-		expected: &v1beta1.TaskRun{},
+		expected: &v1.TaskRun{},
 	}, {
 		yaml: `apiVersion: tekton.dev/v1
 kind: Pipeline`,
-		expected: &v1beta1.Pipeline{},
+		expected: &v1.Pipeline{},
 	}, {
 		yaml: `apiVersion: tekton.dev/v1
 kind: PipelineRun`,
-		expected: &v1beta1.PipelineRun{},
+		expected: &v1.PipelineRun{},
 	}, {
 		yaml: `apiVersion: tekton.dev/v1
 kind: Task
@@ -140,14 +139,12 @@ spec:
     image: bash:latest
     script: |
       echo foo`,
-		expected: &v1beta1.Task{
+		expected: &v1.Task{
 			ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "bar"},
-			Spec: v1beta1.TaskSpec{
-				Steps: []v1beta1.Step{{
-					Container: corev1.Container{
-						Name:  "print",
-						Image: "bash:latest",
-					},
+			Spec: v1.TaskSpec{
+				Steps: []v1.Step{{
+					Name:   "print",
+					Image:  "bash:latest",
 					Script: "echo foo",
 				}},
 			},
@@ -158,9 +155,9 @@ kind: TaskRun
 spec:
   taskRef:
     name: foo`,
-		expected: &v1beta1.TaskRun{
-			Spec: v1beta1.TaskRunSpec{
-				TaskRef: &v1beta1.TaskRef{
+		expected: &v1.TaskRun{
+			Spec: v1.TaskRunSpec{
+				TaskRef: &v1.TaskRef{
 					Name: "foo",
 				},
 			},
@@ -175,12 +172,12 @@ spec:
   - name: task-1
     taskRef:
       name: foo`,
-		expected: &v1beta1.Pipeline{
+		expected: &v1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "bar"},
-			Spec: v1beta1.PipelineSpec{
-				Tasks: []v1beta1.PipelineTask{{
+			Spec: v1.PipelineSpec{
+				Tasks: []v1.PipelineTask{{
 					Name: "task-1",
-					TaskRef: &v1beta1.TaskRef{
+					TaskRef: &v1.TaskRef{
 						Name: "foo",
 					},
 				}},
@@ -194,10 +191,10 @@ metadata:
 spec:
   pipelineRef:
     name: foo`,
-		expected: &v1beta1.PipelineRun{
+		expected: &v1.PipelineRun{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "bar-"},
-			Spec: v1beta1.PipelineRunSpec{
-				PipelineRef: &v1beta1.PipelineRef{
+			Spec: v1.PipelineRunSpec{
+				PipelineRef: &v1.PipelineRef{
 					Name: "foo",
 				},
 			},

@@ -28,6 +28,18 @@
             "default": ""
           }
         },
+        "priorityClassName": {
+          "description": "If specified, indicates the pod's priority. \"system-node-critical\" and \"system-cluster-critical\" are two special keywords which indicate the highest priorities with the former being the highest priority. Any other name must be defined by creating a PriorityClass object with that name. If not specified, the pod priority will be default or zero if there is no default.",
+          "type": "string"
+        },
+        "securityContext": {
+          "description": "SecurityContext sets the security context for the pod",
+          "$ref": "#/definitions/v1.PodSecurityContext"
+        },
+        "serviceAccountName": {
+          "description": "ServiceAccountName is the name of the ServiceAccount to use for the affinity assistant pod. If not specified, the affinity assistant will inherit the serviceAccountName from the PipelineRun's taskRunTemplate. If that is also not specified, the pod will use the namespace's default ServiceAccount. More info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
+          "type": "string"
+        },
         "tolerations": {
           "description": "If specified, the pod's tolerations.",
           "type": "array",
@@ -44,7 +56,7 @@
       "type": "object",
       "properties": {
         "affinity": {
-          "description": "If specified, the pod's scheduling constraints",
+          "description": "If specified, the pod's scheduling constraints. See Pod.spec.affinity (API version: v1)",
           "$ref": "#/definitions/v1.Affinity"
         },
         "automountServiceAccountToken": {
@@ -87,6 +99,10 @@
           "description": "HostNetwork specifies whether the pod may use the node network namespace",
           "type": "boolean"
         },
+        "hostUsers": {
+          "description": "HostUsers indicates whether the pod will use the host's user namespace. Optional: Default to true. If set to true or not present, the pod will be run in the host user namespace, useful for when the pod needs a feature only available to the host user namespace, such as loading a kernel module with CAP_SYS_MODULE. When set to false, a new user namespace is created for the pod. Setting false is useful to mitigating container breakout vulnerabilities such as allowing containers to run as root without their user having root privileges on the host. This field depends on the kubernetes feature gate UserNamespacesSupport being enabled.",
+          "type": "boolean"
+        },
         "imagePullSecrets": {
           "description": "ImagePullSecrets gives the name of the secret used by the pod to pull the image if specified",
           "type": "array",
@@ -117,7 +133,7 @@
           "type": "string"
         },
         "securityContext": {
-          "description": "SecurityContext holds pod-level security attributes and common container settings. Optional: Defaults to empty.  See type description for default values of each field.",
+          "description": "SecurityContext holds pod-level security attributes and common container settings. Optional: Defaults to empty.  See type description for default values of each field. See Pod.spec.securityContext (API version: v1)",
           "$ref": "#/definitions/v1.PodSecurityContext"
         },
         "tolerations": {
@@ -139,13 +155,12 @@
           "x-kubernetes-list-type": "atomic"
         },
         "volumes": {
-          "description": "List of volumes that can be mounted by containers belonging to the pod. More info: https://kubernetes.io/docs/concepts/storage/volumes",
+          "description": "List of volumes that can be mounted by containers belonging to the pod. More info: https://kubernetes.io/docs/concepts/storage/volumes See Pod.spec.volumes (API version: v1)",
           "type": "array",
           "items": {
             "default": {},
             "$ref": "#/definitions/v1.Volume"
           },
-          "x-kubernetes-list-type": "atomic",
           "x-kubernetes-patch-merge-key": "name",
           "x-kubernetes-patch-strategy": "merge,retainKeys"
         }
@@ -185,7 +200,6 @@
         },
         "spec": {
           "description": "Spec is a specification of a custom task",
-          "default": {},
           "$ref": "#/definitions/k8s.io.apimachinery.pkg.runtime.RawExtension"
         }
       }
@@ -406,6 +420,10 @@
           },
           "x-kubernetes-list-type": "atomic"
         },
+        "description": {
+          "description": "Description is a user-facing description of the stepaction that may be used to populate a UI.",
+          "type": "string"
+        },
         "env": {
           "description": "List of environment variables to set in the container. Cannot be updated.",
           "type": "array",
@@ -421,8 +439,44 @@
           "description": "Image reference name to run for this StepAction. More info: https://kubernetes.io/docs/concepts/containers/images",
           "type": "string"
         },
+        "params": {
+          "description": "Params is a list of input parameters required to run the stepAction. Params must be supplied as inputs in Steps unless they declare a defaultvalue.",
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/v1.ParamSpec"
+          }
+        },
+        "results": {
+          "description": "Results are values that this StepAction can output",
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/v1.StepResult"
+          },
+          "x-kubernetes-list-type": "atomic"
+        },
         "script": {
           "description": "Script is the contents of an executable file to execute.\n\nIf Script is not empty, the Step cannot have an Command and the Args will be passed to the Script.",
+          "type": "string"
+        },
+        "securityContext": {
+          "description": "SecurityContext defines the security options the Step should be run with. If set, the fields of SecurityContext override the equivalent fields of PodSecurityContext. More info: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/ The value set in StepAction will take precedence over the value from Task.",
+          "$ref": "#/definitions/v1.SecurityContext"
+        },
+        "volumeMounts": {
+          "description": "Volumes to mount into the Step's filesystem. Cannot be updated.",
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/v1.VolumeMount"
+          },
+          "x-kubernetes-list-type": "atomic",
+          "x-kubernetes-patch-merge-key": "mountPath",
+          "x-kubernetes-patch-strategy": "merge"
+        },
+        "workingDir": {
+          "description": "Step's working directory. If not specified, the container runtime's default will be used, which might be configured in the container image. Cannot be updated.",
           "type": "string"
         }
       }

@@ -79,7 +79,7 @@ func prune(opts *pruneOption) error {
 
 	clientopts := []client.PruneOption{
 		client.WithFilter(opts.filters),
-		client.WithKeepOpt(opts.duration, int64(opts.storage*1e6)),
+		client.WithKeepOpt(opts.duration, int64(opts.storage*1e6), 0, 0),
 	}
 
 	if opts.all {

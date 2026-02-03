@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"strconv"
 	"strings"
 
 	"github.com/moby/buildkit/frontend/gateway/client"
@@ -31,11 +30,8 @@ func Parse(opts client.BuildOpts) (*Config, error) {
 		case "enable-api-fields":
 			c.FeatureFlags.EnableAPIFields = value
 		case "enable-tekton-oci-bundles":
-			b, err := strconv.ParseBool(value)
-			if err != nil {
-				return c, err
-			}
-			c.FeatureFlags.EnableTektonOCIBundles = b
+			// OCI bundles are now handled via resolvers, this option is deprecated
+			_ = value
 		}
 	}
 

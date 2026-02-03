@@ -124,9 +124,9 @@ var (
 // command, we must have fetched the image's ENTRYPOINT before calling this
 // method, using entrypoint_lookup.go.
 // Additionally, Step timeouts are added as entrypoint flag.
-func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1.TaskSpec, breakpointConfig *v1.TaskRunDebug, waitForReadyAnnotation, enableKeepPodOnCancel bool) ([]corev1.Container, error) {
+func orderContainers(ctx context.Context, commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1.TaskSpec, breakpointConfig *v1.TaskRunDebug, waitForReadyAnnotation, enableKeepPodOnCancel bool) ([]corev1.Container, error) {
 	if len(steps) == 0 {
-		return nil, errors.New("No steps specified")
+		return nil, errors.New("no steps specified")
 	}
 
 	for i, s := range steps {
@@ -149,6 +149,7 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 			"-termination_path", terminationPath,
 			"-step_metadata_dir", filepath.Join(RunDir, idx, "status"),
 		)
+
 		argsForEntrypoint = append(argsForEntrypoint, commonExtraEntrypointArgs...)
 		if taskSpec != nil {
 			if taskSpec.Steps != nil && len(taskSpec.Steps) >= i+1 {
@@ -168,12 +169,28 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 				if taskSpec.Steps[i].StderrConfig != nil {
 					argsForEntrypoint = append(argsForEntrypoint, "-stderr_path", taskSpec.Steps[i].StderrConfig.Path)
 				}
+				// add step results
+				stepResultArgs := stepResultArgument(taskSpec.Steps[i].Results)
+
+				argsForEntrypoint = append(argsForEntrypoint, stepResultArgs...)
+				if len(taskSpec.Steps[i].When) > 0 {
+					// marshal and pass to the entrypoint and unmarshal it there.
+					marshal, err := json.Marshal(taskSpec.Steps[i].When)
+
+					if err != nil {
+						return nil, fmt.Errorf("faile to resolve when %w", err)
+					}
+					argsForEntrypoint = append(argsForEntrypoint, "--when_expressions", string(marshal))
+				}
 			}
 			argsForEntrypoint = append(argsForEntrypoint, resultArgument(steps, taskSpec.Results)...)
 		}
 
 		if breakpointConfig != nil && breakpointConfig.NeedsDebugOnFailure() {
 			argsForEntrypoint = append(argsForEntrypoint, "-breakpoint_on_failure")
+		}
+		if breakpointConfig != nil && breakpointConfig.NeedsDebugBeforeStep(s.Name) {
+			argsForEntrypoint = append(argsForEntrypoint, "-debug_before_step")
 		}
 
 		cmd, args := s.Command, s.Args
@@ -199,6 +216,18 @@ func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Containe
 	return steps, nil
 }
 
+// stepResultArgument creates the cli arguments for step results to the entrypointer.
+func stepResultArgument(stepResults []v1.StepResult) []string {
+	if len(stepResults) == 0 {
+		return nil
+	}
+	stepResultNames := []string{}
+	for _, r := range stepResults {
+		stepResultNames = append(stepResultNames, r.Name)
+	}
+	return []string{"-step_results", strings.Join(stepResultNames, ",")}
+}
+
 func resultArgument(steps []corev1.Container, results []v1.TaskResult) []string {
 	if len(results) == 0 {
 		return nil
@@ -209,7 +238,9 @@ func resultArgument(steps []corev1.Container, results []v1.TaskResult) []string 
 func collectResultsName(results []v1.TaskResult) string {
 	var resultNames []string
 	for _, r := range results {
-		resultNames = append(resultNames, r.Name)
+		if r.Value == nil {
+			resultNames = append(resultNames, r.Name)
+		}
 	}
 	return strings.Join(resultNames, ",")
 }
@@ -240,6 +271,43 @@ func init() {
 	}
 }
 
+// buildSidecarStopPatch creates a JSON Patch to replace sidecar container images with nop image
+func buildSidecarStopPatch(pod *corev1.Pod, nopImage string, ctx context.Context) ([]byte, error) {
+	var patchOps []jsonpatch.JsonPatchOperation
+
+	// Iterate over container statuses to find running sidecars
+	for _, s := range pod.Status.ContainerStatuses {
+		// If the results-from is set to sidecar logs,
+		// a sidecar container with name `sidecar-log-results` is injected by the reconciler.
+		// Do not kill this sidecar. Let it exit gracefully.
+		if config.FromContextOrDefaults(ctx).FeatureFlags.ResultExtractionMethod == config.ResultExtractionMethodSidecarLogs && s.Name == pipeline.ReservedResultsSidecarContainerName {
+			continue
+		}
+		// Stop any running container that isn't a step.
+		// An injected sidecar container might not have the
+		// "sidecar-" prefix, so we can't just look for that prefix.
+		if !IsContainerStep(s.Name) && s.State.Running != nil {
+			// Find the corresponding container in the spec by name to get the correct index
+			for i, c := range pod.Spec.Containers {
+				if c.Name == s.Name && c.Image != nopImage {
+					patchOps = append(patchOps, jsonpatch.JsonPatchOperation{
+						Operation: "replace",
+						Path:      fmt.Sprintf("/spec/containers/%d/image", i),
+						Value:     nopImage,
+					})
+					break
+				}
+			}
+		}
+	}
+
+	if len(patchOps) == 0 {
+		return nil, nil
+	}
+
+	return json.Marshal(patchOps)
+}
+
 // CancelPod cancels the pod
 func CancelPod(ctx context.Context, kubeClient kubernetes.Interface, namespace, podName string) error {
 	// PATCH the Pod's annotations to replace the cancel annotation with the
@@ -265,7 +333,7 @@ func UpdateReady(ctx context.Context, kubeclient kubernetes.Interface, pod corev
 // StopSidecars updates sidecar containers in the Pod to a nop image, which
 // exits successfully immediately.
 func StopSidecars(ctx context.Context, nopImage string, kubeclient kubernetes.Interface, namespace, name string) (*corev1.Pod, error) {
-	newPod, err := kubeclient.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	pod, err := kubeclient.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 	if k8serrors.IsNotFound(err) {
 		// return NotFound as-is, since the K8s error checks don't handle wrapping.
 		return nil, err
@@ -273,35 +341,29 @@ func StopSidecars(ctx context.Context, nopImage string, kubeclient kubernetes.In
 		return nil, fmt.Errorf("error getting Pod %q when stopping sidecars: %w", name, err)
 	}
 
-	updated := false
-	if newPod.Status.Phase == corev1.PodRunning {
-		for _, s := range newPod.Status.ContainerStatuses {
-			// If the results-from is set to sidecar logs,
-			// a sidecar container with name `sidecar-log-results` is injected by the reconiler.
-			// Do not kill this sidecar. Let it exit gracefully.
-			if config.FromContextOrDefaults(ctx).FeatureFlags.ResultExtractionMethod == config.ResultExtractionMethodSidecarLogs && s.Name == pipeline.ReservedResultsSidecarContainerName {
-				continue
-			}
-			// Stop any running container that isn't a step.
-			// An injected sidecar container might not have the
-			// "sidecar-" prefix, so we can't just look for that
-			// prefix.
-			if !IsContainerStep(s.Name) && s.State.Running != nil {
-				for j, c := range newPod.Spec.Containers {
-					if c.Name == s.Name && c.Image != nopImage {
-						updated = true
-						newPod.Spec.Containers[j].Image = nopImage
-					}
-				}
-			}
-		}
+	// Only attempt to stop sidecars if pod is running
+	if pod.Status.Phase != corev1.PodRunning {
+		return pod, nil
 	}
-	if updated {
-		if newPod, err = kubeclient.CoreV1().Pods(newPod.Namespace).Update(ctx, newPod, metav1.UpdateOptions{}); err != nil {
-			return nil, fmt.Errorf("error stopping sidecars of Pod %q: %w", name, err)
-		}
+
+	// Build JSON Patch operations to replace sidecar images
+	patchBytes, err := buildSidecarStopPatch(pod, nopImage, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error building patch for stopping sidecars of Pod %q: %w", name, err)
 	}
-	return newPod, nil
+
+	// If no sidecars need to be stopped, return early
+	if patchBytes == nil {
+		return pod, nil
+	}
+
+	// PATCH the Pod's container images to stop sidecars, using the same pattern as UpdateReady and CancelPod
+	patchedPod, err := kubeclient.CoreV1().Pods(namespace).Patch(ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("error stopping sidecars of Pod %q: %w", name, err)
+	}
+
+	return patchedPod, nil
 }
 
 // IsSidecarStatusRunning determines if any SidecarStatus on a TaskRun
@@ -320,12 +382,12 @@ func IsSidecarStatusRunning(tr *v1.TaskRun) bool {
 // represents a step.
 func IsContainerStep(name string) bool { return strings.HasPrefix(name, stepPrefix) }
 
-// isContainerSidecar returns true if the container name indicates that it
+// IsContainerSidecar returns true if the container name indicates that it
 // represents a sidecar.
-func isContainerSidecar(name string) bool { return strings.HasPrefix(name, sidecarPrefix) }
+func IsContainerSidecar(name string) bool { return strings.HasPrefix(name, sidecarPrefix) }
 
-// trimStepPrefix returns the container name, stripped of its step prefix.
-func trimStepPrefix(name string) string { return strings.TrimPrefix(name, stepPrefix) }
+// TrimStepPrefix returns the container name, stripped of its step prefix.
+func TrimStepPrefix(name string) string { return strings.TrimPrefix(name, stepPrefix) }
 
 // TrimSidecarPrefix returns the container name, stripped of its sidecar
 // prefix.
@@ -335,7 +397,12 @@ func TrimSidecarPrefix(name string) string { return strings.TrimPrefix(name, sid
 // returns "step-unnamed-<step-index>" if not specified
 func StepName(name string, i int) string {
 	if name != "" {
-		return fmt.Sprintf("%s%s", stepPrefix, name)
+		return GetContainerName(name)
 	}
 	return fmt.Sprintf("%sunnamed-%d", stepPrefix, i)
+}
+
+// GetContainerName prefixes the input name with "step-"
+func GetContainerName(name string) string {
+	return fmt.Sprintf("%s%s", stepPrefix, name)
 }

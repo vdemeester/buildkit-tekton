@@ -22,12 +22,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hashicorp/go-multierror"
+	"errors"
+
+	pipelineErrors "github.com/tektoncd/pipeline/pkg/apis/pipeline/errors"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/list"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/strings/slices"
 )
 
 // validateParams validates that all Pipeline Task, Matrix.Params and Matrix.Include parameters all have values, match the specified
@@ -169,7 +172,36 @@ func ValidateResolvedTask(ctx context.Context, params []v1.Param, matrix *v1.Mat
 		paramSpecs = rtr.TaskSpec.Params
 	}
 	if err := validateParams(ctx, paramSpecs, params, matrix.GetAllParams()); err != nil {
-		return fmt.Errorf("invalid input params for task %s: %w", rtr.TaskName, err)
+		return pipelineErrors.WrapUserError(fmt.Errorf("invalid input params for task %s: %w", rtr.TaskName, err))
+	}
+	return nil
+}
+
+// ValidateEnumParam validates the param values are in the defined enum list in the corresponding paramSpecs if provided.
+// A validation error is returned otherwise.
+func ValidateEnumParam(ctx context.Context, params []v1.Param, paramSpecs v1.ParamSpecs) error {
+	paramSpecNameToEnum := map[string][]string{}
+	for _, ps := range paramSpecs {
+		if len(ps.Enum) == 0 {
+			continue
+		}
+		paramSpecNameToEnum[ps.Name] = ps.Enum
+	}
+
+	for _, p := range params {
+		// skip validation for and non-string typed and optional params (using default value)
+		// the default value of param is validated at validation webhook dryrun
+		if p.Value.Type != v1.ParamTypeString || p.Value.StringVal == "" {
+			continue
+		}
+		// skip validation for paramSpec without enum
+		if _, ok := paramSpecNameToEnum[p.Name]; !ok {
+			continue
+		}
+
+		if !slices.Contains(paramSpecNameToEnum[p.Name], p.Value.StringVal) {
+			return pipelineErrors.WrapUserError(fmt.Errorf("param `%s` value: %s is not in the enum list", p.Name, p.Value.StringVal))
+		}
 	}
 	return nil
 }
@@ -181,13 +213,13 @@ func validateTaskSpecRequestResources(taskSpec *v1.TaskSpec) error {
 				// First validate the limit in step
 				if limit, ok := step.ComputeResources.Limits[k]; ok {
 					if (&limit).Cmp(request) == -1 {
-						return fmt.Errorf("Invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
+						return pipelineErrors.WrapUserError(fmt.Errorf("invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String()))
 					}
 				} else if taskSpec.StepTemplate != nil {
 					// If step doesn't configure the limit, validate the limit in stepTemplate
 					if limit, ok := taskSpec.StepTemplate.ComputeResources.Limits[k]; ok {
 						if (&limit).Cmp(request) == -1 {
-							return fmt.Errorf("Invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String())
+							return pipelineErrors.WrapUserError(fmt.Errorf("invalid request resource value: %v must be less or equal to limit %v", request.String(), limit.String()))
 						}
 					}
 				}
@@ -202,35 +234,35 @@ func validateTaskSpecRequestResources(taskSpec *v1.TaskSpec) error {
 func validateOverrides(ts *v1.TaskSpec, trs *v1.TaskRunSpec) error {
 	stepErr := validateStepOverrides(ts, trs)
 	sidecarErr := validateSidecarOverrides(ts, trs)
-	return multierror.Append(stepErr, sidecarErr).ErrorOrNil()
+	return errors.Join(stepErr, sidecarErr)
 }
 
 func validateStepOverrides(ts *v1.TaskSpec, trs *v1.TaskRunSpec) error {
-	var err error
+	var errs []error
 	stepNames := sets.NewString()
 	for _, step := range ts.Steps {
 		stepNames.Insert(step.Name)
 	}
 	for _, stepOverride := range trs.StepSpecs {
 		if !stepNames.Has(stepOverride.Name) {
-			err = multierror.Append(err, fmt.Errorf("invalid StepOverride: No Step named %s", stepOverride.Name))
+			errs = append(errs, pipelineErrors.WrapUserError(fmt.Errorf("invalid StepOverride: No Step named %s", stepOverride.Name)))
 		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 func validateSidecarOverrides(ts *v1.TaskSpec, trs *v1.TaskRunSpec) error {
-	var err error
+	var errs []error
 	sidecarNames := sets.NewString()
 	for _, sidecar := range ts.Sidecars {
 		sidecarNames.Insert(sidecar.Name)
 	}
 	for _, sidecarOverride := range trs.SidecarSpecs {
 		if !sidecarNames.Has(sidecarOverride.Name) {
-			err = multierror.Append(err, fmt.Errorf("invalid SidecarOverride: No Sidecar named %s", sidecarOverride.Name))
+			errs = append(errs, pipelineErrors.WrapUserError(fmt.Errorf("invalid SidecarOverride: No Sidecar named %s", sidecarOverride.Name)))
 		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 // validateResults checks the emitted results type and object properties against the ones defined in spec.
@@ -251,12 +283,12 @@ func validateTaskRunResults(tr *v1.TaskRun, resolvedTaskSpec *v1.TaskSpec) error
 			s = append(s, fmt.Sprintf(" \"%v\": %v", k, v))
 		}
 		sort.Strings(s)
-		return fmt.Errorf("Provided results don't match declared results; may be invalid JSON or missing result declaration: %v", strings.Join(s, ","))
+		return pipelineErrors.WrapUserError(fmt.Errorf("Provided results don't match declared results; may be invalid JSON or missing result declaration: %v", strings.Join(s, ",")))
 	}
 
 	// When get the results, for object value need to check if they have missing keys.
 	if missingKeysObjectNames := missingKeysofObjectResults(tr, specResults); len(missingKeysObjectNames) != 0 {
-		return fmt.Errorf("missing keys for these results which are required in TaskResult's properties %v", missingKeysObjectNames)
+		return pipelineErrors.WrapUserError(fmt.Errorf("missing keys for these results which are required in TaskResult's properties %v", missingKeysObjectNames))
 	}
 	return nil
 }

@@ -6,19 +6,19 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8scheme "k8s.io/client-go/kubernetes/scheme"
 )
 
-func resolveTaskInBundle(ctx context.Context, c client.Client, taskref v1beta1.TaskRef) (*v1beta1.Task, error) {
-	var task *v1beta1.Task
-	obj, err := resolveBundle(ctx, c, taskref.Bundle, taskref.Name)
+func resolveTaskInBundle(ctx context.Context, c client.Client, bundle, name string) (*v1.Task, error) {
+	var task *v1.Task
+	obj, err := resolveBundle(ctx, c, bundle, name)
 	if err != nil {
 		return nil, err
 	}
 	switch o := obj.(type) {
-	case *v1beta1.Task:
+	case *v1.Task:
 		task = o
 	default:
 		return nil, errors.Errorf("Unknow type: %+v", o)
@@ -27,14 +27,14 @@ func resolveTaskInBundle(ctx context.Context, c client.Client, taskref v1beta1.T
 	return task, nil
 }
 
-func resolvePipelineInBundle(ctx context.Context, c client.Client, pipelineref v1beta1.PipelineRef) (*v1beta1.Pipeline, error) {
-	var pipeline *v1beta1.Pipeline
-	obj, err := resolveBundle(ctx, c, pipelineref.Bundle, pipelineref.Name)
+func resolvePipelineInBundle(ctx context.Context, c client.Client, bundle, name string) (*v1.Pipeline, error) {
+	var pipeline *v1.Pipeline
+	obj, err := resolveBundle(ctx, c, bundle, name)
 	if err != nil {
 		return nil, err
 	}
 	switch o := obj.(type) {
-	case *v1beta1.Pipeline:
+	case *v1.Pipeline:
 		pipeline = o
 	default:
 		return nil, errors.Errorf("Unknow type: %+v", o)

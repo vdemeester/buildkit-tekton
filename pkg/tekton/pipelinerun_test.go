@@ -247,6 +247,33 @@ func TestValidateTaskSpec_WithStepTimeout(t *testing.T) {
 	}
 }
 
+func TestValidatePipeline_WithTaskTimeout(t *testing.T) {
+	// RED: This test should pass once Task (PipelineTask) Timeout is supported
+	// Currently it should fail because Task Timeout is rejected
+	ctx := context.Background()
+	timeout := &metav1.Duration{Duration: 60 * 1000000000} // 60 seconds
+	spec := v1.PipelineSpec{
+		Tasks: []v1.PipelineTask{{
+			Name:    "task-with-timeout",
+			Timeout: timeout,
+			TaskSpec: &v1.EmbeddedTask{
+				TaskSpec: v1.TaskSpec{
+					Steps: []v1.Step{{
+						Name:   "step1",
+						Image:  "alpine:latest",
+						Script: "echo hello && sleep 5",
+					}},
+				},
+			},
+		}},
+	}
+
+	err := validatePipeline(ctx, spec)
+	if err != nil {
+		t.Errorf("validatePipeline() with Task Timeout should not error, got: %v", err)
+	}
+}
+
 // Suppress unused import warnings
 var _ = fmt.Sprintf
 var _ = os.Stderr

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/gateway/client"
@@ -145,7 +146,13 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 			fn := pipelineWorkspaces[w.Workspace]
 			taskWorkspaces = append(taskWorkspaces, fn("/workspace/"+w.Name))
 		}
-		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces)
+		// Get task timeout as time.Duration pointer
+		var taskTimeout *time.Duration
+		if t.Timeout != nil {
+			d := t.Timeout.Duration
+			taskTimeout = &d
+		}
+		steps, err := taskSpecToPSteps(ctx, c, ts, t.Name, taskWorkspaces, taskTimeout)
 		if err != nil {
 			return llb.State{}, errors.Wrap(err, "couldn't translate TaskSpec to llb")
 		}
@@ -215,7 +222,13 @@ func PipelineRunToLLB(ctx context.Context, c client.Client, r PipelineRun) (llb.
 					taskWorkspaces = append(taskWorkspaces, fn("/workspace/"+w.Name))
 				}
 			}
-			steps, err := taskSpecToPSteps(ctx, c, ts, "finally/"+t.Name, taskWorkspaces)
+			// Get task timeout as time.Duration pointer
+			var taskTimeout *time.Duration
+			if t.Timeout != nil {
+				d := t.Timeout.Duration
+				taskTimeout = &d
+			}
+			steps, err := taskSpecToPSteps(ctx, c, ts, "finally/"+t.Name, taskWorkspaces, taskTimeout)
 			if err != nil {
 				return llb.State{}, errors.Wrap(err, "couldn't translate Finally TaskSpec to llb")
 			}
@@ -295,9 +308,7 @@ func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 		if len(pt.When) > 0 {
 			return errors.Errorf("Finally task %s: WhenExpressions not supported in finally blocks", pt.Name)
 		}
-		if pt.Timeout != nil {
-			return errors.Errorf("Finally task %s: Timeout not supported", pt.Name)
-		}
+		// Task Timeout is now supported (applied to each step)
 		if pt.TaskSpec != nil {
 			if !isTektonTask(pt.TaskSpec.TypeMeta) {
 				return errors.Errorf("Finally task %s: Custom task not supported", pt.Name)
@@ -310,9 +321,7 @@ func validatePipeline(ctx context.Context, p v1.PipelineSpec) error {
 	for _, pt := range p.Tasks {
 		// WhenExpressions are now supported - they are evaluated at LLB build time
 		// Silently ignore Retries
-		if pt.Timeout != nil {
-			return errors.Errorf("Task %s: Timeout not supported", pt.Name)
-		}
+		// Task Timeout is now supported (applied to each step)
 		if pt.TaskSpec != nil {
 			if !isTektonTask(pt.TaskSpec.TypeMeta) {
 				return errors.Errorf("Task %s: Custom task not supported", pt.Name)

@@ -26,6 +26,8 @@ func TestReadResources(t *testing.T) {
 		additionals: []string{"serviceaccount.yaml"},
 	}, {
 		main: "workspaces.yaml",
+	}, {
+		main: "taskrun-with-volumes-and-onerror.yaml",
 	}}
 	for _, tc := range tt {
 		tc := tc
@@ -197,6 +199,29 @@ spec:
 				PipelineRef: &v1.PipelineRef{
 					Name: "foo",
 				},
+			},
+		},
+	}, {
+		yaml: `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: task-with-onerror
+spec:
+  steps:
+  - name: may-fail
+    image: alpine:latest
+    onError: continue
+    script: |
+      exit 1`,
+		expected: &v1.Task{
+			ObjectMeta: metav1.ObjectMeta{Name: "task-with-onerror"},
+			Spec: v1.TaskSpec{
+				Steps: []v1.Step{{
+					Name:    "may-fail",
+					Image:   "alpine:latest",
+					OnError: v1.Continue,
+					Script:  "exit 1",
+				}},
 			},
 		},
 	}}

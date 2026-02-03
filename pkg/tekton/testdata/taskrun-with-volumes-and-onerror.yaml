@@ -1,0 +1,40 @@
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: test-volumes-onerror
+spec:
+  taskSpec:
+    volumes:
+    - name: shared-data
+      emptyDir: {}
+    - name: cache
+      emptyDir: {}
+    steps:
+    - name: write-data
+      image: alpine:latest
+      script: |
+        echo "Hello from step 1" > /data/message.txt
+        echo "Cache data" > /cache/data.txt
+      volumeMounts:
+      - name: shared-data
+        mountPath: /data
+      - name: cache
+        mountPath: /cache
+    - name: may-fail
+      image: alpine:latest
+      onError: continue
+      script: |
+        echo "This step may fail but will continue"
+        exit 1
+    - name: read-data
+      image: alpine:latest
+      script: |
+        cat /data/message.txt
+        cat /cache/data.txt
+      volumeMounts:
+      - name: shared-data
+        mountPath: /data
+        readOnly: true
+      - name: cache
+        mountPath: /cache
+        readOnly: true

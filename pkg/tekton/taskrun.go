@@ -21,11 +21,12 @@ const (
 )
 
 type pstep struct {
-	name       string
-	image      string // might be ref
-	results    []mountOptionFn
-	runOptions []llb.RunOption
-	workspaces []mountOptionFn
+	name         string
+	image        string // might be ref
+	results      []mountOptionFn
+	runOptions   []llb.RunOption
+	workspaces   []mountOptionFn
+	volumeMounts []mountOptionFn
 }
 
 type mountOptionFn func(llb.State) llb.RunOption
@@ -132,17 +133,39 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name 
 	if err != nil {
 		return steps, errors.Wrap(err, "couldn't merge steps with StepTemplate")
 	}
+
+	// Build volume states map for emptyDir volumes
+	volumeStates := make(map[string]llb.State)
+	for _, vol := range t.Volumes {
+		if vol.EmptyDir != nil {
+			// Use a persistent cache for emptyDir to share data between steps
+			volumeStates[vol.Name] = llb.Scratch()
+		}
+	}
+
 	for i, step := range mergedSteps {
 		ref, err := reference.ParseNormalizedNamed(step.Image)
 		if err != nil {
 			return steps, err
 		}
+
+		// Check if this step should continue on error
+		continueOnError := step.OnError == v1.Continue
+
 		runOptions := []llb.RunOption{
 			llb.IgnoreCache,
 			llb.WithCustomName("[tekton] " + name + "/" + step.Name),
 		}
 		if step.Script != "" {
-			filename, scriptSt := files.Script(name+"/"+step.Name, fmt.Sprintf("script-%d", i), step.Script)
+			filename, scriptSt := files.Script(name+"/"+step.Name, fmt.Sprintf("script-%d", i), step.Script, continueOnError)
+			scriptFile := filepath.Join(scriptsDir, filename)
+			runOptions = append(runOptions,
+				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath("/"), llb.Readonly),
+				llb.Args([]string{scriptFile}),
+			)
+		} else if continueOnError && len(step.Command) > 0 {
+			// For commands with OnError: continue, wrap in a script
+			filename, scriptSt := files.CommandWrapper(name+"/"+step.Name, fmt.Sprintf("cmd-%d", i), step.Command, step.Args, true)
 			scriptFile := filepath.Join(scriptsDir, filename)
 			runOptions = append(runOptions,
 				llb.AddMount(scriptsDir, scriptSt, llb.SourcePath("/"), llb.Readonly),
@@ -178,12 +201,38 @@ func taskSpecToPSteps(ctx context.Context, c client.Client, t v1.TaskSpec, name 
 				return llb.AddMount("/tekton/results", state, llb.AsPersistentCacheDir(cacheDirName, llb.CacheMountShared))
 			},
 		}
+
+		// Handle VolumeMounts
+		volumeMounts := []mountOptionFn{}
+		for _, vm := range step.VolumeMounts {
+			volName := vm.Name
+			mountPath := vm.MountPath
+			subPath := vm.SubPath
+			readOnly := vm.ReadOnly
+
+			if _, ok := volumeStates[volName]; ok {
+				volumeMounts = append(volumeMounts, func(state llb.State) llb.RunOption {
+					opts := []llb.MountOption{
+						llb.AsPersistentCacheDir(name+"/volume/"+volName, llb.CacheMountShared),
+					}
+					if subPath != "" {
+						opts = append(opts, llb.SourcePath(subPath))
+					}
+					if readOnly {
+						opts = append(opts, llb.Readonly)
+					}
+					return llb.AddMount(mountPath, state, opts...)
+				})
+			}
+		}
+
 		steps[i] = pstep{
-			name:       step.Name,
-			image:      ref.String(),
-			runOptions: runOptions,
-			results:    results,
-			workspaces: workspaces,
+			name:         step.Name,
+			image:        ref.String(),
+			runOptions:   runOptions,
+			results:      results,
+			workspaces:   workspaces,
+			volumeMounts: volumeMounts,
 		}
 	}
 	return steps, nil
@@ -207,6 +256,10 @@ func pstepToState(c client.Client, steps []pstep, resultState llb.State, additio
 		}
 		for _, wf := range step.workspaces {
 			mounts = append(mounts, wf(stepStates[i]))
+		}
+		// Add volume mounts
+		for _, vm := range step.volumeMounts {
+			mounts = append(mounts, vm(resultState))
 		}
 		runOptions = append(runOptions, mounts...)
 		runOptions = append(runOptions, additionnalMounts...)
@@ -240,22 +293,21 @@ func validateTaskSpec(ctx context.Context, t v1.TaskSpec) error {
 	if len(t.Sidecars) > 0 {
 		return errors.New("Sidecars are not supported")
 	}
-	if len(t.Volumes) > 0 {
-		return errors.New("Volumes not supported")
+	// Volumes are now supported (emptyDir only for now)
+	for _, vol := range t.Volumes {
+		if vol.EmptyDir == nil {
+			return errors.Errorf("Volume %s: only emptyDir volumes are supported", vol.Name)
+		}
 	}
 	for i, s := range t.Steps {
 		if s.Timeout != nil {
 			return errors.Errorf("Step %d: Timeout not supported", i)
 		}
-		if s.OnError != "" {
-			return errors.Errorf("Step %d: OnError not supported", i)
-		}
+		// OnError is now supported (continue and stopAndFail)
 		if len(s.EnvFrom) > 0 {
 			return errors.Errorf("Step %d: EnvFrom not supported", i)
 		}
-		if len(s.VolumeMounts) > 0 {
-			return errors.Errorf("Step %d: VolumeMounts not supported", i)
-		}
+		// VolumeMounts are now supported
 		if len(s.VolumeDevices) > 0 {
 			return errors.Errorf("Step %d: VolumeDevices not supported", i)
 		}

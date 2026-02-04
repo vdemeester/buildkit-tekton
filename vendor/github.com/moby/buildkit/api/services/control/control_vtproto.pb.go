@@ -56,6 +56,7 @@ func (m *DiskUsageRequest) CloneVT() *DiskUsageRequest {
 		return (*DiskUsageRequest)(nil)
 	}
 	r := new(DiskUsageRequest)
+	r.AgeLimit = m.AgeLimit
 	if rhs := m.Filter; rhs != nil {
 		tmpContainer := make([]string, len(rhs))
 		copy(tmpContainer, rhs)
@@ -141,6 +142,7 @@ func (m *SolveRequest) CloneVT() *SolveRequest {
 	r.Internal = m.Internal
 	r.SourcePolicy = m.SourcePolicy.CloneVT()
 	r.EnableSessionExporter = m.EnableSessionExporter
+	r.SourcePolicySession = m.SourcePolicySession
 	if rhs := m.ExporterAttrsDeprecated; rhs != nil {
 		tmpContainer := make(map[string]string, len(rhs))
 		for k, v := range rhs {
@@ -831,6 +833,9 @@ func (this *DiskUsageRequest) EqualVT(that *DiskUsageRequest) bool {
 			return false
 		}
 	}
+	if this.AgeLimit != that.AgeLimit {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
@@ -1033,6 +1038,9 @@ func (this *SolveRequest) EqualVT(that *SolveRequest) bool {
 		}
 	}
 	if this.EnableSessionExporter != that.EnableSessionExporter {
+		return false
+	}
+	if this.SourcePolicySession != that.SourcePolicySession {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -2019,6 +2027,11 @@ func (m *DiskUsageRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if m.AgeLimit != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.AgeLimit))
+		i--
+		dAtA[i] = 0x10
+	}
 	if len(m.Filter) > 0 {
 		for iNdEx := len(m.Filter) - 1; iNdEx >= 0; iNdEx-- {
 			i -= len(m.Filter[iNdEx])
@@ -2235,6 +2248,13 @@ func (m *SolveRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if len(m.SourcePolicySession) > 0 {
+		i -= len(m.SourcePolicySession)
+		copy(dAtA[i:], m.SourcePolicySession)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.SourcePolicySession)))
+		i--
+		dAtA[i] = 0x7a
 	}
 	if m.EnableSessionExporter {
 		i--
@@ -3991,6 +4011,9 @@ func (m *DiskUsageRequest) SizeVT() (n int) {
 			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 		}
 	}
+	if m.AgeLimit != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.AgeLimit))
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -4146,6 +4169,10 @@ func (m *SolveRequest) SizeVT() (n int) {
 	}
 	if m.EnableSessionExporter {
 		n += 2
+	}
+	l = len(m.SourcePolicySession)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -5006,6 +5033,25 @@ func (m *DiskUsageRequest) UnmarshalVT(dAtA []byte) error {
 			}
 			m.Filter = append(m.Filter, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgeLimit", wireType)
+			}
+			m.AgeLimit = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AgeLimit |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -6248,6 +6294,38 @@ func (m *SolveRequest) UnmarshalVT(dAtA []byte) error {
 				}
 			}
 			m.EnableSessionExporter = bool(v != 0)
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SourcePolicySession", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SourcePolicySession = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])

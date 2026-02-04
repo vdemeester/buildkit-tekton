@@ -9,7 +9,7 @@ require (
 	github.com/moby/buildkit v0.21.0
 	github.com/moby/term v0.5.2
 	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/tektoncd/pipeline v1.9.0
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea

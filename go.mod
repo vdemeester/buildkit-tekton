@@ -81,7 +81,7 @@ require (
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v1.0.0-rc.2 // indirect
-	github.com/containerd/stargz-snapshotter/estargz v0.17.0 // indirect
+	github.com/containerd/stargz-snapshotter/estargz v0.18.1 // indirect
 	github.com/containerd/ttrpc v1.2.7 // indirect
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -119,7 +119,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/cel-go v0.27.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
-	github.com/google/go-containerregistry v0.20.6 // indirect
+	github.com/google/go-containerregistry v0.20.7 // indirect
 	github.com/google/go-containerregistry/pkg/authn/k8schain v0.0.0-20240108195214-a0658aa1d0cc // indirect
 	github.com/google/go-containerregistry/pkg/authn/kubernetes v0.0.0-20240108195214-a0658aa1d0cc // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
@@ -171,7 +171,7 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
-	github.com/sigstore/sigstore v1.10.0 // indirect
+	github.com/sigstore/sigstore v1.10.4 // indirect
 	github.com/sigstore/sigstore/pkg/signature/kms/aws v1.9.5 // indirect
 	github.com/sigstore/sigstore/pkg/signature/kms/azure v1.9.5 // indirect
 	github.com/sigstore/sigstore/pkg/signature/kms/gcp v1.9.5 // indirect

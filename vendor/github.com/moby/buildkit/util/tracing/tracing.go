@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptrace"
-	"slices"
 
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/stack"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -34,19 +32,9 @@ func StartSpan(ctx context.Context, operationName string, opts ...trace.SpanStar
 }
 
 func hasStacktrace(err error) bool {
-	switch e := err.(type) {
-	case interface{ StackTrace() *stack.Stack }:
-		return true
-	case interface{ StackTrace() errors.StackTrace }:
-		return true
-	case interface{ Unwrap() error }:
-		return hasStacktrace(e.Unwrap())
-	case interface{ Unwrap() []error }:
-		if slices.ContainsFunc(e.Unwrap(), hasStacktrace) {
-			return true
-		}
-	}
-	return false
+	var stack interface{ StackTrace() *stack.Stack }
+	var pkgStack interface{ StackTrace() errors.StackTrace }
+	return errors.As(err, &stack) || errors.As(err, &pkgStack)
 }
 
 // FinishWithError finalizes the span and sets the error if one is passed
@@ -54,7 +42,7 @@ func FinishWithError(span trace.Span, err error) {
 	if err != nil {
 		span.RecordError(err)
 		if hasStacktrace(err) {
-			span.SetAttributes(attribute.String(string(semconv.ExceptionStacktraceKey), fmt.Sprintf("%+v", stack.Formatter(err))))
+			span.SetAttributes(semconv.ExceptionStacktrace(fmt.Sprintf("%+v", stack.Formatter(err))))
 		}
 		span.SetStatus(codes.Error, err.Error())
 	}

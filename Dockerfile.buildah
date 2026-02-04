@@ -1,4 +1,4 @@
-ARG GOLANG_IMAGE=golang:1.20-alpine@sha256:d0edf023da755c2917ae42dd57e4f745d82c8c9ee0b510b4d3da2a80da11c230
+ARG GOLANG_IMAGE=golang:1.25-alpine
 
 FROM ${GOLANG_IMAGE} AS build
 WORKDIR /src

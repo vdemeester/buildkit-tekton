@@ -901,7 +901,7 @@ github.com/spiffe/go-spiffe/v2/workloadapi
 ## explicit; go 1.23.0
 github.com/spiffe/spire-api-sdk/proto/spire/api/server/entry/v1
 github.com/spiffe/spire-api-sdk/proto/spire/api/types
-# github.com/tektoncd/pipeline v1.9.0
+# github.com/tektoncd/pipeline v1.9.1
 ## explicit; go 1.24.0
 github.com/tektoncd/pipeline/internal/artifactref
 github.com/tektoncd/pipeline/internal/sidecarlogresults
